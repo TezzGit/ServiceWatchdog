@@ -1,4 +1,4 @@
-module ServiceWatchdog/ServiceWatchdog
+module Watchdog
 
 go 1.24.3
 

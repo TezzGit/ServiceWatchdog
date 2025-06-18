@@ -1,6 +1,6 @@
 // https://dev.to/cosmic_predator/writing-a-windows-service-in-go-1d1m
 
-package Watchdog
+package main
 
 import (
 	"fmt"
