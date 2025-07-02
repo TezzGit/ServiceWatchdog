@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,8 +11,10 @@ import (
 
 	"encoding/json"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 const DEBUG_MODE = true
@@ -58,7 +61,6 @@ type RecoveryStep struct {
 }
 
 type RestartServiceAction struct {
-	ServiceName          string `json:"service_name"`
 	MaxAttempts          int    `json:"max_attempts"`
 	DelayBetweenAttempts int    `json:"delay_between_attempts"`
 	OnFailure            string `json:"on_failure"`
@@ -113,7 +115,7 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 			case svc.Continue:
 				status <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 			default:
-				log.Printf("Unexepcted service control request #%d", c)
+				log.Printf("Unexepcted service control request %+v", c)
 			}
 		}
 	}
@@ -131,6 +133,40 @@ func runService(name string, isDebug bool, watcher *serviceWatcher) {
 			log.Fatalln("Error running service in Service Control mode.")
 		}
 	}
+}
+
+// Validate Recovery Steps
+func (r *RecoveryStep) Validate() error {
+	switch r.Type {
+	case RestartService:
+		if r.RestartService == nil {
+			return fmt.Errorf("missing or invalid restart_service action")
+		}
+	case RunScript:
+		if r.RunScript == nil || r.RunScript.ScriptPath == "" {
+			return fmt.Errorf("missing run_script config")
+		}
+	}
+	return nil
+}
+
+// Validate Service to Watch Exists
+func (s *Service) Validate() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("failed to connect to service manager: %w", err)
+	}
+	defer m.Disconnect()
+
+	openedService, err := m.OpenService(s.Name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return fmt.Errorf("service '%s' does not exist", s.Name)
+		}
+		return fmt.Errorf("failed to open service '%s': %w", s.Name, err)
+	}
+	defer openedService.Close()
+	return nil
 }
 
 func main() {

@@ -15,33 +15,31 @@
           "name": "RequiredService",
           "location": "RemoteServer",
           "ip": "192.168.100.1"
-        },
-        {
-          "name": "RequiredService",
-          "location": "localhost",
-          "ip": "10.0.0.1"
         }
       ],
       "recovery_sequence": [
         {
           "type": "restart_service",
-          "service_name": "my-app-service",
-          "max_attempts": 1,
-          "delay_between_attempts": 0,
-          "on_failure": "continue"
+          "restart_service": {
+            "max_attempts": 1,
+            "delay_between_attempts": 0,
+            "on_failure": "continue"
+          }
         },
         {
           "type": "run_script",
-          "script_path": "/opt/recovery/check_config.sh",
-          "args": [
-            "--verbose"
-          ],
-          "timeout_seconds": 30,
-          "on_failure": "continue"
+          "run_script": {
+            "script_path": "/opt/recovery/check_config.sh",
+            "args": ["--verbose"],
+            "timeout_seconds": 30,
+            "on_failure": "continue"
+          }
         },
         {
           "type": "send_email",
-          "on_failure": "log_only"
+          "send_email": {
+            "on_failure": "log_only"
+          }
         }
       ]
     }
