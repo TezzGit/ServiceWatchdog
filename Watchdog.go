@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -18,6 +19,7 @@ import (
 )
 
 const DEBUG_MODE = true
+const TCP_TIMEOUT = 5
 
 type serviceWatcher struct {
 	Email    EmailConfig `json:"email"`
@@ -152,20 +154,25 @@ func (r *RecoveryStep) Validate() error {
 
 // Validate Service to Watch Exists
 func (s *Service) Validate() error {
-	m, err := mgr.Connect()
+	scm, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
-	defer m.Disconnect()
+	defer scm.Disconnect()
 
-	openedService, err := m.OpenService(s.Name)
-	if err != nil {
-		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return fmt.Errorf("service '%s' does not exist", s.Name)
-		}
-		return fmt.Errorf("failed to open service '%s': %w", s.Name, err)
+	// Catch Empty Service Names
+	if strings.TrimSpace(s.Name) == "" {
+		return errors.New("service name cannot be empty")
 	}
-	defer openedService.Close()
+
+	// Verify Service Exists
+	exists, err := serviceExists(scm, s.Name)
+	if err != nil {
+		return fmt.Errorf("error checking service %q: %w", s.Name, err)
+	}
+	if !exists {
+		return fmt.Errorf("service %q does not exist on localhost", s.Name)
+	}
 	return nil
 }
 
@@ -173,37 +180,55 @@ func (d *Dependency) Validate() error {
 	var scm *mgr.Mgr
 	var err error
 
+	// Catch Empty Dependency Name
+	if strings.TrimSpace(d.Name) == "" {
+		return errors.New("dependency service name cannot be empty")
+	}
+
+	// Connect to Service Manager - Local or Remote
 	if d.Location == "localhost" {
 		scm, err = mgr.Connect()
 	} else {
 		scm, err = connectToRemoteSCM(d.Location, d.IP)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to connect to SCM at '%s', IP('%s'): '%w'", d.Location, d.IP, err)
+		return fmt.Errorf("failed to connect to SCM at '%s', IP('%s'): %w", d.Location, d.IP, err)
 	}
 	defer scm.Disconnect()
 
-	serviceHandle, err := scm.OpenService(d.Name)
+	// Catch Service Exists at Location
+	exists, err := serviceExists(scm, d.Name)
 	if err != nil {
-		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return fmt.Errorf("service '%s' does not exist on '%s'", d.Name, d.Location)
-		}
-		return fmt.Errorf("failed to open service '%s' on '%s': '%w'", d.Name, d.Location, err)
+		return fmt.Errorf("error checking service %q: %w", d.Name, err)
 	}
-	defer serviceHandle.Close()
+	if !exists {
+		return fmt.Errorf("service %q does not exist on %q", d.Name, d.Location)
+	}
 
 	return nil
+}
+
+func serviceExists(m *mgr.Mgr, name string) (bool, error) {
+	svc, err := m.OpenService(name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer svc.Close()
+	return true, nil
 }
 
 // Validate Dependency
 func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 	if err := verifyHostnameIPMapping(hostname, ip); err != nil {
-		log.Fatalln("Warning: hostname '%s' does not resolve to IP '%s': '%v'", hostname, ip, err)
+		log.Printf("Warning: hostname '%s' does not resolve to IP '%s': '%v'", hostname, ip, err)
 	}
 
-	// TRY Hostname
+	// Try Hostname
 	if err := testTCPConnectivity(hostname); err == nil {
-		if scm, er := tryConnect(hostname); err == nil {
+		if scm, err := tryConnectSCM(hostname); err == nil {
 			return scm, nil
 		} else {
 			log.Printf("Failed to connect to SCM via hostname '%s': '%v'", hostname, err)
@@ -222,7 +247,7 @@ func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 	} else {
 		log.Printf("TCP connectivity to IP '%s' failed: '%v'", ip, err)
 	}
-	return nil, fmt.Errorf("failed to connect to SCM using hostname '%s' and IP '%s'", hostname,)
+	return nil, fmt.Errorf("failed to connect to SCM using hostname '%s' and IP '%s'", hostname, ip)
 }
 
 func tryConnectSCM(target string) (*mgr.Mgr, error) {
@@ -231,15 +256,16 @@ func tryConnectSCM(target string) (*mgr.Mgr, error) {
 	}
 	ptr, err := windows.UTF16PtrFromString(`\\` + target)
 	if err != nil {
-		return nil, fmt.Errorf("invalid SCM target '%s': '%w'" target, err)
+		return nil, fmt.Errorf("invalid SCM target '%s': %w", target, err)
 	}
 	handle, err := windows.OpenSCManager(ptr, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		return nil, fmt.Errorf("OpenSCManager failed for '%s': '%w'", target, err)
+		return nil, fmt.Errorf("OpenSCManager failed for '%s': %w", target, err)
 	}
 	return &mgr.Mgr{Handle: handle}, nil
 }
 
+// Validates IP matches Host Records
 func verifyHostnameIPMapping(hostname, expectedIP string) error {
 	ips, err := net.LookupHost(hostname)
 	if err != nil {
@@ -253,8 +279,9 @@ func verifyHostnameIPMapping(hostname, expectedIP string) error {
 	return fmt.Errorf("IP '%s' not found in DNS records for hostname '%s'", expectedIP, hostname)
 }
 
+// Add Timeout Functionality
 func testTCPConnectivity(target string) error {
-	timeout := 3 * time.Second
+	timeout := TCP_TIMEOUT * time.Second
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, "135"), timeout)
 	if err != nil {
 		return err
