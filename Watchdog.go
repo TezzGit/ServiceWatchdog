@@ -3,13 +3,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"time"
-
-	"encoding/json"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -166,6 +166,101 @@ func (s *Service) Validate() error {
 		return fmt.Errorf("failed to open service '%s': %w", s.Name, err)
 	}
 	defer openedService.Close()
+	return nil
+}
+
+func (d *Dependency) Validate() error {
+	var scm *mgr.Mgr
+	var err error
+
+	if d.Location == "localhost" {
+		scm, err = mgr.Connect()
+	} else {
+		scm, err = connectToRemoteSCM(d.Location, d.IP)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to connect to SCM at '%s', IP('%s'): '%w'", d.Location, d.IP, err)
+	}
+	defer scm.Disconnect()
+
+	serviceHandle, err := scm.OpenService(d.Name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return fmt.Errorf("service '%s' does not exist on '%s'", d.Name, d.Location)
+		}
+		return fmt.Errorf("failed to open service '%s' on '%s': '%w'", d.Name, d.Location, err)
+	}
+	defer serviceHandle.Close()
+
+	return nil
+}
+
+// Validate Dependency
+func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
+	if err := verifyHostnameIPMapping(hostname, ip); err != nil {
+		log.Fatalln("Warning: hostname '%s' does not resolve to IP '%s': '%v'", hostname, ip, err)
+	}
+
+	// TRY Hostname
+	if err := testTCPConnectivity(hostname); err == nil {
+		if scm, er := tryConnect(hostname); err == nil {
+			return scm, nil
+		} else {
+			log.Printf("Failed to connect to SCM via hostname '%s': '%v'", hostname, err)
+		}
+	} else {
+		log.Printf("TCP connnectivity to hostname '%s' failed: '%v'", hostname, err)
+	}
+
+	// Try IP
+	if err := testTCPConnectivity(ip); err == nil {
+		if scm, err := tryConnectSCM(ip); err == nil {
+			return scm, nil
+		} else {
+			log.Printf("Failed to connect to SCM via IP '%s': '%v'", ip, err)
+		}
+	} else {
+		log.Printf("TCP connectivity to IP '%s' failed: '%v'", ip, err)
+	}
+	return nil, fmt.Errorf("failed to connect to SCM using hostname '%s' and IP '%s'", hostname,)
+}
+
+func tryConnectSCM(target string) (*mgr.Mgr, error) {
+	if target == "" {
+		return nil, errors.New("SCM target is empty")
+	}
+	ptr, err := windows.UTF16PtrFromString(`\\` + target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SCM target '%s': '%w'" target, err)
+	}
+	handle, err := windows.OpenSCManager(ptr, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return nil, fmt.Errorf("OpenSCManager failed for '%s': '%w'", target, err)
+	}
+	return &mgr.Mgr{Handle: handle}, nil
+}
+
+func verifyHostnameIPMapping(hostname, expectedIP string) error {
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		return fmt.Errorf("DNS resolution failed: %w", err)
+	}
+	for _, resolved := range ips {
+		if resolved == expectedIP {
+			return nil // match found
+		}
+	}
+	return fmt.Errorf("IP '%s' not found in DNS records for hostname '%s'", expectedIP, hostname)
+}
+
+func testTCPConnectivity(target string) error {
+	timeout := 3 * time.Second
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, "135"), timeout)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+
 	return nil
 }
 
