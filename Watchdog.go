@@ -21,6 +21,7 @@ import (
 
 const DEBUG_MODE = true
 const TCP_TIMEOUT = 5
+const MAX_CONCURRENT = 10
 
 type serviceWatcher struct {
 	Email    EmailConfig `json:"email"`
@@ -82,12 +83,14 @@ type SendEmailAction struct {
 }
 
 func LoadConfig(path string) (*serviceWatcher, error) {
+	// READ JSON
 	watcher, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := validateConfig(watcher); err != nil {
+	// VALIDATE CONFIG
+	if err := validateConfig(watcher, MAX_CONCURRENT); err != nil {
 		return nil, err
 	}
 
@@ -110,7 +113,9 @@ func readConfig(path string) (*serviceWatcher, error) {
 }
 
 // validateConfig concurrently validates all services in the config
-func validateConfig(watcher *serviceWatcher) error {
+func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
+
+	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(watcher.Services))
 
@@ -118,6 +123,10 @@ func validateConfig(watcher *serviceWatcher) error {
 		wg.Add(1)
 		go func(svc Service) {
 			defer wg.Done()
+
+			sem <- struct{}{}        // acquire a permit
+			defer func() { <-sem }() // Release semaphore when done
+
 			if err := validateService(svc); err != nil {
 				errCh <- err
 			}
@@ -132,7 +141,14 @@ func validateConfig(watcher *serviceWatcher) error {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("validation errors: %v", errs)
+		var b strings.Builder
+		b.WriteString("validation errors:\n")
+		for _, err := range errs {
+			b.WriteString("- ")
+			b.WriteString(err.Error())
+			b.WriteString("\n")
+		}
+		return fmt.Errorf("%s", b.String())
 	}
 
 	return nil
