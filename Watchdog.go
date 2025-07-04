@@ -148,7 +148,8 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 			b.WriteString(err.Error())
 			b.WriteString("\n")
 		}
-		return fmt.Errorf("%s", b.String())
+		// Print user-friendly error but still join internally
+		return fmt.Errorf("%s\n(details: %w)", b.String(), errors.Join(errs...))
 	}
 
 	return nil
