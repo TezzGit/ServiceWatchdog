@@ -82,6 +82,20 @@ type SendEmailAction struct {
 }
 
 func LoadConfig(path string) (*serviceWatcher, error) {
+	watcher, err := readConfig(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateConfig(watcher); err != nil {
+		return nil, err
+	}
+
+	return watcher, nil
+}
+
+// readConfig reads and unmarshals the config from disk
+func readConfig(path string) (*serviceWatcher, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -92,7 +106,11 @@ func LoadConfig(path string) (*serviceWatcher, error) {
 		return nil, err
 	}
 
-	// Use a wait group and an error channel to validate concurrently
+	return &watcher, nil
+}
+
+// validateConfig concurrently validates all services in the config
+func validateConfig(watcher *serviceWatcher) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(watcher.Services))
 
@@ -106,16 +124,18 @@ func LoadConfig(path string) (*serviceWatcher, error) {
 		}(svc)
 	}
 
-	// Wait for all validations to complete
 	wg.Wait()
 	close(errCh)
 
-	// Return the first error found, if any
-	if len(errCh) > 0 {
-		return nil, <-errCh
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("validation errors: %v", errs)
 	}
 
-	return &watcher, nil
+	return nil
 }
 
 func validateService(svc Service) error {
