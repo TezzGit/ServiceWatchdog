@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -35,16 +36,17 @@ type EmailConfig struct {
 	UseTLS     bool   `json:"use_tls"`
 }
 
+// Dependencies Not Required
 type Service struct {
 	Name             string         `json:"name"`
-	Dependencies     []Dependency   `json:"dependencies"`
+	Dependencies     []Dependency   `json:"dependencies,omitempty"`
 	RecoverySequence []RecoveryStep `json:"recovery_sequence"`
 }
 
 type Dependency struct {
 	Name     string `json:"name"`
-	Location string `json:"location"`
-	IP       string `json:"ip"`
+	Location string `json:"location,omitempty"`
+	IP       string `json:"ip,omitempty"`
 }
 
 type RecoveryActionType string
@@ -90,7 +92,50 @@ func LoadConfig(path string) (*serviceWatcher, error) {
 		return nil, err
 	}
 
+	// Use a wait group and an error channel to validate concurrently
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(watcher.Services))
+
+	for _, svc := range watcher.Services {
+		wg.Add(1)
+		go func(svc Service) {
+			defer wg.Done()
+			if err := validateService(svc); err != nil {
+				errCh <- err
+			}
+		}(svc)
+	}
+
+	// Wait for all validations to complete
+	wg.Wait()
+	close(errCh)
+
+	// Return the first error found, if any
+	if len(errCh) > 0 {
+		return nil, <-errCh
+	}
+
 	return &watcher, nil
+}
+
+func validateService(svc Service) error {
+	if err := svc.Validate(); err != nil {
+		return fmt.Errorf("service %q validation failed: %w", svc.Name, err)
+	}
+
+	for _, dep := range svc.Dependencies {
+		if err := dep.Validate(); err != nil {
+			return fmt.Errorf("dependency %q validation failed for service %q: %w", dep.Name, svc.Name, err)
+		}
+	}
+
+	for _, step := range svc.RecoverySequence {
+		if err := step.Validate(); err != nil {
+			return fmt.Errorf("recovery step %q validation failed for service %q: %w", step.Type, svc.Name, err)
+		}
+	}
+
+	return nil
 }
 
 func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
@@ -123,7 +168,7 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 	}
 }
 
-func runService(name string, isDebug bool, watcher *serviceWatcher) {
+func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)
 		if err != nil {
@@ -152,72 +197,112 @@ func (r *RecoveryStep) Validate() error {
 	return nil
 }
 
-// Validate Service to Watch Exists
+// Query Service States
 func (s *Service) Validate() error {
+	if strings.TrimSpace(s.Name) == "" {
+		return errors.New("service name cannot be empty")
+	}
+
 	scm, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
 	defer scm.Disconnect()
 
-	// Catch Empty Service Names
-	if strings.TrimSpace(s.Name) == "" {
-		return errors.New("service name cannot be empty")
-	}
-
-	// Verify Service Exists
-	exists, err := serviceExists(scm, s.Name)
+	_, err = s.openService(scm)
 	if err != nil {
-		return fmt.Errorf("error checking service %q: %w", s.Name, err)
-	}
-	if !exists {
-		return fmt.Errorf("service %q does not exist on localhost", s.Name)
+		return err
 	}
 	return nil
 }
 
-func (d *Dependency) Validate() error {
-	var scm *mgr.Mgr
-	var err error
+// QueryState retrieves the current state of the service.
+func (s *Service) QueryState(serviceManager *mgr.Mgr) (svc.State, error) {
+	if serviceManager == nil {
+		return svc.State(0), fmt.Errorf("service manager is nil")
+	}
 
-	// Catch Empty Dependency Name
+	serviceHandle, err := s.openService(serviceManager)
+	if err != nil {
+		return svc.State(0), err
+	}
+	defer serviceHandle.Close()
+
+	status, err := serviceHandle.Query()
+	if err != nil {
+		return svc.State(0), fmt.Errorf("failed to query service %q: %w", s.Name, err)
+	}
+	return status.State, nil
+}
+
+func (s *Service) openService(mgr *mgr.Mgr) (*mgr.Service, error) {
+	svcHandle, err := mgr.OpenService(s.Name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return nil, fmt.Errorf("service %q does not exist", s.Name)
+		}
+		return nil, fmt.Errorf("failed to open service %q: %w", s.Name, err)
+	}
+	return svcHandle, nil
+}
+
+func (d *Dependency) QueryState() (svc.State, error) {
+	if strings.TrimSpace(d.Name) == "" {
+		return svc.State(0), errors.New("dependency service name cannot be empty")
+	}
+
+	serviceHandle, scm, err := d.openService()
+	if err != nil {
+		return svc.State(0), err
+	}
+	defer serviceHandle.Close()
+	defer scm.Disconnect()
+
+	status, err := serviceHandle.Query()
+	if err != nil {
+		return svc.State(0), fmt.Errorf("failed to query service %q: %w", d.Name, err)
+	}
+
+	return status.State, nil
+}
+
+func (d *Dependency) Validate() error {
 	if strings.TrimSpace(d.Name) == "" {
 		return errors.New("dependency service name cannot be empty")
 	}
 
-	// Connect to Service Manager - Local or Remote
+	serviceHandle, scm, err := d.openService()
+	if err != nil {
+		return err
+	}
+	defer serviceHandle.Close()
+	defer scm.Disconnect()
+
+	return nil
+}
+
+func (d *Dependency) openService() (*mgr.Service, *mgr.Mgr, error) {
+	var scm *mgr.Mgr
+	var err error
+
 	if d.Location == "localhost" {
 		scm, err = mgr.Connect()
 	} else {
 		scm, err = connectToRemoteSCM(d.Location, d.IP)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to connect to SCM at '%s', IP('%s'): %w", d.Location, d.IP, err)
+		return nil, nil, fmt.Errorf("failed to connect to SCM at %q, IP(%q): %w", d.Location, d.IP, err)
 	}
-	defer scm.Disconnect()
 
-	// Catch Service Exists at Location
-	exists, err := serviceExists(scm, d.Name)
+	serviceHandle, err := scm.OpenService(d.Name)
 	if err != nil {
-		return fmt.Errorf("error checking service %q: %w", d.Name, err)
-	}
-	if !exists {
-		return fmt.Errorf("service %q does not exist on %q", d.Name, d.Location)
-	}
-
-	return nil
-}
-
-func serviceExists(m *mgr.Mgr, name string) (bool, error) {
-	svc, err := m.OpenService(name)
-	if err != nil {
+		scm.Disconnect()
 		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return false, nil
+			return nil, nil, fmt.Errorf("service %q does not exist on %q", d.Name, d.Location)
 		}
-		return false, err
+		return nil, nil, fmt.Errorf("failed to open service %q on %q: %w", d.Name, d.Location, err)
 	}
-	defer svc.Close()
-	return true, nil
+	return serviceHandle, scm, nil
 }
 
 // Validate Dependency
@@ -304,5 +389,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
-	runService("serviceWatcher", DEBUG_MODE, watcher)
+	runWacherService("serviceWatcher", DEBUG_MODE, watcher)
 }
