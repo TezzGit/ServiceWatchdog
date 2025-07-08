@@ -8,3 +8,8 @@ Requirements
 - Attempt to Restart Service (x) Times
 - Only Send One Email to Notify Service Failed to Start, Restart Flag After Service Stabilises
 - Run Scripts / Collect Logs as Part of Restart Attempts
+
+
+Rough Logic
+
+![alt text](image.png)
