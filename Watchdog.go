@@ -96,6 +96,10 @@ type DependencyKey struct {
 	IP       string
 }
 
+func (d Dependency) Key() DependencyKey {
+	return DependencyKey(d)
+}
+
 // Cache Dependency Health Status to Avoid Per Service Call
 type HealthCache struct {
 	mu      sync.Mutex
@@ -104,6 +108,31 @@ type HealthCache struct {
 
 func newHealthCache() *HealthCache {
 	return &HealthCache{results: make(map[DependencyKey]HealthStatus)}
+}
+
+func (hc *HealthCache) GetOrRun(dep Dependency, fn func() (bool, error)) HealthStatus {
+	key := DependencyKey(dep)
+
+	hc.mu.Lock()
+	if result, exists := hc.results[key]; exists {
+		hc.mu.Unlock()
+		return result
+	}
+	hc.mu.Unlock()
+
+	// Run and store
+	healthy, err := fn()
+	status := HealthStatus{
+		Name:      dep.Name,
+		IsService: false,
+		Healthy:   healthy,
+		Err:       err,
+	}
+
+	hc.mu.Lock()
+	hc.results[key] = status
+	hc.mu.Unlock()
+	return status
 }
 
 func LoadConfig(path string) (*serviceWatcher, error) {
@@ -143,15 +172,31 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(watcher.Services))
 
+	// 🔹 Step 1: Validate unique dependencies
+	uniqueDeps := collectUniqueDependencies(watcher.Services)
+
+	for key, dep := range uniqueDeps {
+		wg.Add(1)
+		go func(dep Dependency, key DependencyKey) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := dep.Validate(); err != nil {
+				errCh <- fmt.Errorf("dependency %q validation failed: %w", key.Name, err)
+			}
+		}(dep, key)
+	}
+
+	// 🔹 Step 2: Validate services (without validating dependencies again)
 	for _, svc := range watcher.Services {
 		wg.Add(1)
-		go func(svc Service) {
+		go func(s Service) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-			sem <- struct{}{}        // acquire a permit
-			defer func() { <-sem }() // Release semaphore when done
-
-			if err := validateService(&svc); err != nil {
+			if err := s.Validate(); err != nil {
 				errCh <- err
 			}
 		}(svc)
@@ -179,26 +224,6 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 	return nil
 }
 
-func validateService(svc *Service) error {
-	if err := svc.Validate(); err != nil {
-		return fmt.Errorf("service %q validation failed: %w", svc.Name, err)
-	}
-
-	for _, dep := range svc.Dependencies {
-		if err := dep.Validate(); err != nil {
-			return fmt.Errorf("dependency %q validation failed for service %q: %w", dep.Name, svc.Name, err)
-		}
-	}
-
-	for _, step := range svc.RecoverySequence {
-		if err := step.Validate(); err != nil {
-			return fmt.Errorf("recovery step %q validation failed for service %q: %w", step.Type, svc.Name, err)
-		}
-	}
-
-	return nil
-}
-
 func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPauseAndContinue
 
@@ -209,7 +234,8 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 	for {
 		select {
 		case <-tick:
-			log.Print("Tick Handled...!")
+			log.Print("Running Service Health Checks...!")
+			m.RunHealthChecks()
 		case c := <-r:
 			switch c.Cmd {
 			case svc.Interrogate:
@@ -437,7 +463,7 @@ func (d *Dependency) QueryState() (svc.State, error) {
 	return status.State, nil
 }
 
-func (s *Service) HealthCheck(maxDepConcurrency int) ([]HealthStatus, error) {
+func (s *Service) HealthCheck(maxDepConcurrency int, cache *HealthCache) ([]HealthStatus, error) {
 	scm, err := mgr.Connect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
@@ -469,13 +495,8 @@ func (s *Service) HealthCheck(maxDepConcurrency int) ([]HealthStatus, error) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				healthy, err := dep.HealthCheck() // which calls dep.QueryState() internally
-				resultsCh <- HealthStatus{
-					Name:      dep.Name,
-					IsService: false,
-					Healthy:   healthy,
-					Err:       err,
-				}
+				status := cache.GetOrRun(dep, dep.HealthCheck)
+				resultsCh <- status
 			}()
 		}
 		wg.Wait()
@@ -522,13 +543,33 @@ func collectUniqueDependencies(services []Service) map[DependencyKey]Dependency 
 	unique := make(map[DependencyKey]Dependency)
 	for _, svc := range services {
 		for _, dep := range svc.Dependencies {
-			key := DependencyKey{dep.Name, dep.Location, dep.IP}
+			key := DependencyKey(dep) // ✅ idiomatic and quiets staticcheck
 			if _, exists := unique[key]; !exists {
 				unique[key] = dep
 			}
 		}
 	}
 	return unique
+}
+
+func (sw *serviceWatcher) RunHealthChecks() {
+	cache := newHealthCache()
+	for _, svc := range sw.Services {
+		results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
+		if err != nil {
+			log.Printf("Health check failed for %s: %v", svc.Name, err)
+			continue
+		}
+
+		for _, result := range results {
+			if !result.Healthy {
+				log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
+
+				// Recovery Functionality
+
+			}
+		}
+	}
 }
 
 func main() {
