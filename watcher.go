@@ -8,6 +8,11 @@ import (
 	"golang.org/x/sys/windows/svc/debug"
 )
 
+type serviceWatcher struct {
+	Email    EmailConfig `json:"email"`
+	Services []Service   `json:"services"`
+}
+
 func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)

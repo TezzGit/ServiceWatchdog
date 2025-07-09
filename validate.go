@@ -1,43 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 )
-
-func LoadConfig(path string) (*serviceWatcher, error) {
-	// READ JSON
-	watcher, err := readConfig(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// VALIDATE CONFIG
-	if err := validateConfig(watcher, MAX_CONCURRENT); err != nil {
-		return nil, err
-	}
-
-	return watcher, nil
-}
-
-// readConfig reads and unmarshals the config from disk
-func readConfig(path string) (*serviceWatcher, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var watcher serviceWatcher
-	if err := json.Unmarshal(data, &watcher); err != nil {
-		return nil, err
-	}
-
-	return &watcher, nil
-}
 
 // validateConfig concurrently validates all services in the config
 func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
