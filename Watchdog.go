@@ -82,6 +82,13 @@ type SendEmailAction struct {
 	OnFailure string `json:"on_failure"`
 }
 
+type HealthStatus struct {
+	Name      string
+	IsService bool
+	Healthy   bool
+	Err       error
+}
+
 func LoadConfig(path string) (*serviceWatcher, error) {
 	// READ JSON
 	watcher, err := readConfig(path)
@@ -127,7 +134,7 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 			sem <- struct{}{}        // acquire a permit
 			defer func() { <-sem }() // Release semaphore when done
 
-			if err := validateService(svc); err != nil {
+			if err := validateService(&svc); err != nil {
 				errCh <- err
 			}
 		}(svc)
@@ -155,7 +162,7 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 	return nil
 }
 
-func validateService(svc Service) error {
+func validateService(svc *Service) error {
 	if err := svc.Validate(); err != nil {
 		return fmt.Errorf("service %q validation failed: %w", svc.Name, err)
 	}
@@ -253,25 +260,6 @@ func (s *Service) Validate() error {
 	return nil
 }
 
-// QueryState retrieves the current state of the service.
-func (s *Service) QueryState(serviceManager *mgr.Mgr) (svc.State, error) {
-	if serviceManager == nil {
-		return svc.State(0), fmt.Errorf("service manager is nil")
-	}
-
-	serviceHandle, err := s.openService(serviceManager)
-	if err != nil {
-		return svc.State(0), err
-	}
-	defer serviceHandle.Close()
-
-	status, err := serviceHandle.Query()
-	if err != nil {
-		return svc.State(0), fmt.Errorf("failed to query service %q: %w", s.Name, err)
-	}
-	return status.State, nil
-}
-
 func (s *Service) openService(mgr *mgr.Mgr) (*mgr.Service, error) {
 	svcHandle, err := mgr.OpenService(s.Name)
 	if err != nil {
@@ -281,26 +269,6 @@ func (s *Service) openService(mgr *mgr.Mgr) (*mgr.Service, error) {
 		return nil, fmt.Errorf("failed to open service %q: %w", s.Name, err)
 	}
 	return svcHandle, nil
-}
-
-func (d *Dependency) QueryState() (svc.State, error) {
-	if strings.TrimSpace(d.Name) == "" {
-		return svc.State(0), errors.New("dependency service name cannot be empty")
-	}
-
-	serviceHandle, scm, err := d.openService()
-	if err != nil {
-		return svc.State(0), err
-	}
-	defer serviceHandle.Close()
-	defer scm.Disconnect()
-
-	status, err := serviceHandle.Query()
-	if err != nil {
-		return svc.State(0), fmt.Errorf("failed to query service %q: %w", d.Name, err)
-	}
-
-	return status.State, nil
 }
 
 func (d *Dependency) Validate() error {
@@ -411,6 +379,126 @@ func testTCPConnectivity(target string) error {
 	_ = conn.Close()
 
 	return nil
+}
+
+// QueryState retrieves the current state of the service.
+func (s *Service) QueryState(serviceManager *mgr.Mgr) (svc.State, error) {
+	if serviceManager == nil {
+		return svc.State(0), fmt.Errorf("service manager is nil")
+	}
+
+	serviceHandle, err := s.openService(serviceManager)
+	if err != nil {
+		return svc.State(0), err
+	}
+	defer serviceHandle.Close()
+
+	status, err := serviceHandle.Query()
+	if err != nil {
+		return svc.State(0), fmt.Errorf("failed to query service %q: %w", s.Name, err)
+	}
+	return status.State, nil
+}
+
+func (d *Dependency) QueryState() (svc.State, error) {
+	if strings.TrimSpace(d.Name) == "" {
+		return svc.State(0), errors.New("dependency service name cannot be empty")
+	}
+
+	serviceHandle, scm, err := d.openService()
+	if err != nil {
+		return svc.State(0), err
+	}
+	defer serviceHandle.Close()
+	defer scm.Disconnect()
+
+	status, err := serviceHandle.Query()
+	if err != nil {
+		return svc.State(0), fmt.Errorf("failed to query service %q: %w", d.Name, err)
+	}
+
+	return status.State, nil
+}
+
+func (s *Service) HealthCheck(maxDepConcurrency int) ([]HealthStatus, error) {
+	scm, err := mgr.Connect()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
+	}
+	defer scm.Disconnect()
+
+	svcState, err := s.QueryState(scm)
+	if err != nil {
+		return nil, err
+	}
+
+	results := []HealthStatus{{
+		Name:      s.Name,
+		IsService: true,
+		Healthy:   isHealthyState(s.Name, svcState),
+		Err:       nil,
+	}}
+
+	if !results[0].Healthy {
+		sem := make(chan struct{}, maxDepConcurrency)
+		var wg sync.WaitGroup
+		resultsCh := make(chan HealthStatus, len(s.Dependencies))
+
+		for _, dep := range s.Dependencies {
+			dep := dep
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				healthy, err := dep.HealthCheck() // which calls dep.QueryState() internally
+				resultsCh <- HealthStatus{
+					Name:      dep.Name,
+					IsService: false,
+					Healthy:   healthy,
+					Err:       err,
+				}
+			}()
+		}
+		wg.Wait()
+		close(resultsCh)
+
+		for r := range resultsCh {
+			results = append(results, r)
+		}
+	}
+
+	return results, nil
+}
+
+func isHealthyState(name string, state svc.State) bool {
+	switch state {
+	case svc.Running:
+		return true
+	default:
+		log.Printf("Service %q is in an unhealthy state: %v", name, state)
+		return false
+	}
+}
+
+func (d *Dependency) HealthCheck() (bool, error) {
+	dependencyState, err := d.QueryState()
+
+	if err != nil {
+		return false, fmt.Errorf("failed to connect to service manager: %w", err)
+	}
+
+	switch dependencyState {
+	case svc.Stopped, svc.StopPending:
+		log.Printf("%v is stopping", d.Name)
+	case svc.Paused, svc.PausePending:
+		log.Printf("%v is pausing", d.Name)
+	default:
+		log.Printf("%v's current state: %v", d.Name, dependencyState)
+		return true, nil
+	}
+	return false, nil
 }
 
 func main() {
