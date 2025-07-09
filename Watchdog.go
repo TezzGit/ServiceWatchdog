@@ -89,6 +89,23 @@ type HealthStatus struct {
 	Err       error
 }
 
+// Unique Dependencies
+type DependencyKey struct {
+	Name     string
+	Location string
+	IP       string
+}
+
+// Cache Dependency Health Status to Avoid Per Service Call
+type HealthCache struct {
+	mu      sync.Mutex
+	results map[DependencyKey]HealthStatus
+}
+
+func newHealthCache() *HealthCache {
+	return &HealthCache{results: make(map[DependencyKey]HealthStatus)}
+}
+
 func LoadConfig(path string) (*serviceWatcher, error) {
 	// READ JSON
 	watcher, err := readConfig(path)
@@ -499,6 +516,19 @@ func (d *Dependency) HealthCheck() (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func collectUniqueDependencies(services []Service) map[DependencyKey]Dependency {
+	unique := make(map[DependencyKey]Dependency)
+	for _, svc := range services {
+		for _, dep := range svc.Dependencies {
+			key := DependencyKey{dep.Name, dep.Location, dep.IP}
+			if _, exists := unique[key]; !exists {
+				unique[key] = dep
+			}
+		}
+	}
+	return unique
 }
 
 func main() {
