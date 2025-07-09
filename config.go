@@ -17,7 +17,7 @@ type EmailConfig struct {
 const TCP_TIMEOUT = 5
 const MAX_CONCURRENT = 10
 
-func LoadConfig(path string) (*serviceWatcher, error) {
+func loadConfig(path string) (*serviceWatcher, error) {
 	// READ JSON
 	watcher, err := readConfig(path)
 	if err != nil {

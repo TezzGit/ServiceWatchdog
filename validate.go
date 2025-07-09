@@ -38,7 +38,7 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if err := s.Validate(); err != nil {
+			if err := s.validate(); err != nil {
 				errCh <- err
 			}
 		}(svc)

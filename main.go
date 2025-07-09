@@ -19,7 +19,7 @@ func main() {
 
 	log.SetOutput(f)
 
-	watcher, err := LoadConfig("config.json")
+	watcher, err := loadConfig("config.json")
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}

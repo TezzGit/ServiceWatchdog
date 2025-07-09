@@ -67,7 +67,7 @@ func (d *Dependency) openService() (*mgr.Service, *mgr.Mgr, error) {
 	return serviceHandle, scm, nil
 }
 
-func (d *Dependency) QueryState() (svc.State, error) {
+func (d *Dependency) queryState() (svc.State, error) {
 	if strings.TrimSpace(d.Name) == "" {
 		return svc.State(0), errors.New("dependency service name cannot be empty")
 	}
@@ -88,7 +88,7 @@ func (d *Dependency) QueryState() (svc.State, error) {
 }
 
 func (d *Dependency) HealthCheck() (bool, error) {
-	dependencyState, err := d.QueryState()
+	dependencyState, err := d.queryState()
 
 	if err != nil {
 		return false, fmt.Errorf("failed to connect to service manager: %w", err)

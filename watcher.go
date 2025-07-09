@@ -38,7 +38,7 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 		select {
 		case <-tick:
 			log.Print("Running Service Health Checks...!")
-			m.RunHealthChecks()
+			m.runHealthChecks()
 		case c := <-r:
 			switch c.Cmd {
 			case svc.Interrogate:
@@ -58,7 +58,7 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 	}
 }
 
-func (sw *serviceWatcher) RunHealthChecks() {
+func (sw *serviceWatcher) runHealthChecks() {
 	cache := newHealthCache()
 	for _, svc := range sw.Services {
 		results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
@@ -68,7 +68,7 @@ func (sw *serviceWatcher) RunHealthChecks() {
 		}
 
 		for _, result := range results {
-			if !result.Healthy {
+			if !result.Running {
 				log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
 
 				// Recovery Functionality

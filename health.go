@@ -7,24 +7,24 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-type HealthStatus struct {
+type healthStatus struct {
 	Name      string
 	IsService bool
-	Healthy   bool
+	Running   bool
 	Err       error
 }
 
 // Cache Dependency Health Status to Avoid Per Service Call
-type HealthCache struct {
+type healthCache struct {
 	mu      sync.Mutex
-	results map[DependencyKey]HealthStatus
+	results map[DependencyKey]healthStatus
 }
 
-func newHealthCache() *HealthCache {
-	return &HealthCache{results: make(map[DependencyKey]HealthStatus)}
+func newHealthCache() *healthCache {
+	return &healthCache{results: make(map[DependencyKey]healthStatus)}
 }
 
-func (hc *HealthCache) GetOrRun(dep Dependency, fn func() (bool, error)) HealthStatus {
+func (hc *healthCache) GetOrRun(dep Dependency, fn func() (bool, error)) healthStatus {
 	key := DependencyKey(dep)
 
 	hc.mu.Lock()
@@ -36,10 +36,10 @@ func (hc *HealthCache) GetOrRun(dep Dependency, fn func() (bool, error)) HealthS
 
 	// Run and store
 	healthy, err := fn()
-	status := HealthStatus{
+	status := healthStatus{
 		Name:      dep.Name,
 		IsService: false,
-		Healthy:   healthy,
+		Running:   healthy,
 		Err:       err,
 	}
 

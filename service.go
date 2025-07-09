@@ -29,8 +29,8 @@ func (s *Service) openService(mgr *mgr.Mgr) (*mgr.Service, error) {
 	return svcHandle, nil
 }
 
-// QueryState retrieves the current state of the service.
-func (s *Service) QueryState(serviceManager *mgr.Mgr) (svc.State, error) {
+// queryState retrieves the current state of the service.
+func (s *Service) queryState(serviceManager *mgr.Mgr) (svc.State, error) {
 	if serviceManager == nil {
 		return svc.State(0), fmt.Errorf("service manager is nil")
 	}
@@ -48,29 +48,29 @@ func (s *Service) QueryState(serviceManager *mgr.Mgr) (svc.State, error) {
 	return status.State, nil
 }
 
-func (s *Service) HealthCheck(maxDepConcurrency int, cache *HealthCache) ([]HealthStatus, error) {
+func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]healthStatus, error) {
 	scm, err := mgr.Connect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
 	}
 	defer scm.Disconnect()
 
-	svcState, err := s.QueryState(scm)
+	svcState, err := s.queryState(scm)
 	if err != nil {
 		return nil, err
 	}
 
-	results := []HealthStatus{{
+	results := []healthStatus{{
 		Name:      s.Name,
 		IsService: true,
-		Healthy:   isHealthyState(s.Name, svcState),
+		Running:   isHealthyState(s.Name, svcState),
 		Err:       nil,
 	}}
 
-	if !results[0].Healthy {
+	if !results[0].Running {
 		sem := make(chan struct{}, maxDepConcurrency)
 		var wg sync.WaitGroup
-		resultsCh := make(chan HealthStatus, len(s.Dependencies))
+		resultsCh := make(chan healthStatus, len(s.Dependencies))
 
 		for _, dep := range s.Dependencies {
 			dep := dep
@@ -96,7 +96,7 @@ func (s *Service) HealthCheck(maxDepConcurrency int, cache *HealthCache) ([]Heal
 }
 
 // Query Service States
-func (s *Service) Validate() error {
+func (s *Service) validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("service name cannot be empty")
 	}
