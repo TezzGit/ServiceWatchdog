@@ -12,6 +12,8 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
+const RPC_PORT = "135"
+
 type ServiceManager interface {
 	Restart(serviceName string, attempts int, delaySeconds int) error
 	Start(serviceName string) error
@@ -45,7 +47,7 @@ func (sm *LocalServiceManager) Restart(serviceName string, attempts int, delay i
 	}
 	defer svcHandle.Close()
 
-	for range attempts {
+	for i := 0; i < attempts; i++ {
 
 		_, err = svcHandle.Control(svc.Stop)
 		if err != nil {
@@ -76,8 +78,8 @@ func (sm *LocalServiceManager) Stop(serviceName string) error {
 		return err
 	}
 	defer svcHandle.Close()
-	_, errorStop := svcHandle.Control(svc.Stop)
-	return errorStop
+	_, err = svcHandle.Control(svc.Stop)
+	return err
 }
 
 func (sm *LocalServiceManager) Query(serviceName string) (svc.State, error) {
@@ -113,7 +115,7 @@ func (r *RemoteServiceManager) Query(serviceName string) (svc.State, error) {
 
 	svcHandle, err := r.mgr.OpenService(serviceName)
 	if err != nil {
-		if err == windows.ERROR_SERVICE_DOES_NOT_EXIST {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return 0, fmt.Errorf("service %q does not exist", serviceName)
 		}
 		return 0, fmt.Errorf("failed to open service %q: %w", serviceName, err)
@@ -144,8 +146,8 @@ func (r *RemoteServiceManager) Stop(serviceName string) error {
 		return fmt.Errorf("failed to open service %q: %w", serviceName, err)
 	}
 	defer svcHandle.Close()
-	_, errorStop := svcHandle.Control(svc.Stop)
-	return errorStop
+	_, err = svcHandle.Control(svc.Stop)
+	return err
 }
 
 func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delaySeconds int) error {
@@ -155,7 +157,7 @@ func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delaySe
 	}
 	defer svcHandle.Close()
 
-	for range attempts {
+	for i := 0; i < attempts; i++ {
 
 		_, err = svcHandle.Control(svc.Stop)
 		if err != nil {
@@ -236,7 +238,7 @@ func verifyHostnameIPMapping(hostname, expectedIP string) error {
 // Add Timeout Functionality
 func testTCPConnectivity(target string) error {
 	timeout := TCP_TIMEOUT * time.Second
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, "135"), timeout)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, RPC_PORT), timeout)
 	if err != nil {
 		return err
 	}
