@@ -47,7 +47,7 @@ func (sm *LocalServiceManager) Restart(serviceName string, attempts int, delay i
 	}
 	defer svcHandle.Close()
 
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 
 		_, err = svcHandle.Control(svc.Stop)
 		if err != nil {
@@ -157,7 +157,7 @@ func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delaySe
 	}
 	defer svcHandle.Close()
 
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 
 		_, err = svcHandle.Control(svc.Stop)
 		if err != nil {
