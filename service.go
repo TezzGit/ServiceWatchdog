@@ -73,7 +73,6 @@ func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]heal
 		resultsCh := make(chan healthStatus, len(s.Dependencies))
 
 		for _, dep := range s.Dependencies {
-			dep := dep
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
