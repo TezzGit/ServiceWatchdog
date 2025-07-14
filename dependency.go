@@ -3,10 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
-
-	"golang.org/x/sys/windows/svc"
 )
 
 type Dependency struct {
@@ -52,13 +49,7 @@ func (d *Dependency) HealthCheck() (bool, error) {
 		return false, fmt.Errorf("failed to query state: %w", err)
 	}
 
-	switch state {
-	case svc.Stopped, svc.StopPending:
-		log.Printf("%v is stopping", d.Name)
-	case svc.Paused, svc.PausePending:
-		log.Printf("%v is pausing", d.Name)
-	default:
-		log.Printf("%v's current state: %v", d.Name, state)
+	if isHealthyState(d.Name, state) {
 		return true, nil
 	}
 	return false, nil
