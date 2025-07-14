@@ -13,25 +13,16 @@ type serviceWatcher struct {
 	Services []Service   `json:"services"`
 }
 
-type SMTPEmailSender struct {
-	Config EmailConfig
-}
-
-func (s *SMTPEmailSender) Send(subject, body string) error {
-	// Send an Email
-	return nil
-}
-
 func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)
 		if err != nil {
-			log.Fatalln("Error running service in debug mode.")
+			log.Fatalln("running service in debug mode. error: %w", err)
 		}
 	} else {
 		err := svc.Run(name, watcher)
 		if err != nil {
-			log.Fatalln("Error running service in Service Control mode.")
+			log.Fatalln("running service in service control mode. error: %w", err)
 		}
 	}
 }
@@ -81,6 +72,11 @@ func (sw *serviceWatcher) runHealthChecks() {
 				log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
 
 				// Recovery Functionality
+				if result.IsDependency {
+					// Dependency Handling
+					continue
+				}
+				svc.Recover()
 
 			}
 		}

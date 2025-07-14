@@ -33,10 +33,10 @@ func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]heal
 	}
 
 	results := []healthStatus{{
-		Name:      s.Name,
-		IsService: true,
-		Running:   isHealthyState(s.Name, svcState),
-		Err:       nil,
+		Name:         s.Name,
+		IsDependency: false,
+		Running:      isHealthyState(s.Name, svcState),
+		Err:          nil,
 	}}
 
 	if !results[0].Running {
