@@ -3,12 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
-
-	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/svc"
-	"golang.org/x/sys/windows/svc/mgr"
 )
 
 // Dependencies Not Required
@@ -18,44 +15,19 @@ type Service struct {
 	RecoverySequence []RecoveryStep `json:"recovery_sequence"`
 }
 
-func (s *Service) openService(mgr *mgr.Mgr) (*mgr.Service, error) {
-	svcHandle, err := mgr.OpenService(s.Name)
-	if err != nil {
-		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return nil, fmt.Errorf("service %q does not exist", s.Name)
-		}
-		return nil, fmt.Errorf("failed to open service %q: %w", s.Name, err)
-	}
-	return svcHandle, nil
-}
-
-// queryState retrieves the current state of the service.
-func (s *Service) queryState(serviceManager *mgr.Mgr) (svc.State, error) {
-	if serviceManager == nil {
-		return svc.State(0), fmt.Errorf("service manager is nil")
-	}
-
-	serviceHandle, err := s.openService(serviceManager)
-	if err != nil {
-		return svc.State(0), err
-	}
-	defer serviceHandle.Close()
-
-	status, err := serviceHandle.Query()
-	if err != nil {
-		return svc.State(0), fmt.Errorf("failed to query service %q: %w", s.Name, err)
-	}
-	return status.State, nil
+type RecoveryContext struct {
+	ServiceName string
+	Services    ServiceManager
 }
 
 func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]healthStatus, error) {
-	scm, err := mgr.Connect()
+	manager, err := NewLocalServiceManager()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
 	}
-	defer scm.Disconnect()
+	defer manager.Close()
 
-	svcState, err := s.queryState(scm)
+	svcState, err := manager.Query(s.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -100,15 +72,39 @@ func (s *Service) validate() error {
 		return errors.New("service name cannot be empty")
 	}
 
-	scm, err := mgr.Connect()
+	manager, err := NewLocalServiceManager()
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
-	defer scm.Disconnect()
+	defer manager.Close()
 
-	_, err = s.openService(scm)
+	_, err = manager.Query(s.Name)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Service) Recover() error {
+	// Run Recovery Sequence
+	svcMgr, err := NewLocalServiceManager()
+	if err != nil {
+		return fmt.Errorf("failed to connect to service manager: %w", err)
+	}
+	defer svcMgr.mgr.Disconnect()
+
+	ctx := RecoveryContext{
+		ServiceName: s.Name,
+		Services:    svcMgr,
+	}
+
+	for _, step := range s.RecoverySequence {
+		if err := step.Execute(ctx); err != nil {
+			log.Printf("Recovery step %v failed: %v", step.Type, err)
+			if step.getOnFailureAction() == "abort" {
+				return err
+			}
+		}
 	}
 	return nil
 }

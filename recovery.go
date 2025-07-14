@@ -48,3 +48,26 @@ func (r *RecoveryStep) Validate() error {
 	}
 	return nil
 }
+
+func (r *RecoveryStep) getOnFailureAction() string {
+	switch r.Type {
+	case RestartService:
+		if r.RestartService != nil {
+			return r.RestartService.OnFailure
+		}
+
+	case RunScript:
+		if r.RunScript != nil {
+			return r.RunScript.OnFailure
+		}
+	case SendEmail:
+		if r.SendEmail != nil {
+			return r.SendEmail.OnFailure
+		}
+	}
+	return "abort"
+}
+
+func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
+	return nil
+}

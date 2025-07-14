@@ -13,6 +13,15 @@ type serviceWatcher struct {
 	Services []Service   `json:"services"`
 }
 
+type SMTPEmailSender struct {
+	Config EmailConfig
+}
+
+func (s *SMTPEmailSender) Send(subject, body string) error {
+	// Send an Email
+	return nil
+}
+
 func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)

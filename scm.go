@@ -8,10 +8,173 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-// Validate Dependency
+type ServiceManager interface {
+	Restart(serviceName string, attempts int, delaySeconds int) error
+	Start(serviceName string) error
+	Stop(serviceName string) error
+	Query(serviceName string) (svc.State, error)
+	Close() error
+}
+
+type LocalServiceManager struct {
+	mgr *mgr.Mgr
+}
+
+type RemoteServiceManager struct {
+	Host string
+	IP   string
+	mgr  *mgr.Mgr
+}
+
+func NewLocalServiceManager() (*LocalServiceManager, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
+	}
+	return &LocalServiceManager{mgr: m}, nil
+}
+
+func (sm *LocalServiceManager) Restart(serviceName string, attempts int, delay int) error {
+	svcHandle, err := sm.mgr.OpenService(serviceName)
+	if err != nil {
+		return err
+	}
+	defer svcHandle.Close()
+
+	for range attempts {
+
+		_, err = svcHandle.Control(svc.Stop)
+		if err != nil {
+			return fmt.Errorf("failed to stop %q: %w", serviceName, err)
+		}
+		time.Sleep(time.Duration(delay) * time.Second)
+
+		err = svcHandle.Start()
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("failed to restart %q after %d attempts", serviceName, attempts)
+}
+
+func (sm *LocalServiceManager) Start(serviceName string) error {
+	svcHandle, err := sm.mgr.OpenService(serviceName)
+	if err != nil {
+		return err
+	}
+	defer svcHandle.Close()
+	return svcHandle.Start()
+}
+
+func (sm *LocalServiceManager) Stop(serviceName string) error {
+	svcHandle, err := sm.mgr.OpenService(serviceName)
+	if err != nil {
+		return err
+	}
+	defer svcHandle.Close()
+	_, errorStop := svcHandle.Control(svc.Stop)
+	return errorStop
+}
+
+func (sm *LocalServiceManager) Query(serviceName string) (svc.State, error) {
+	svcHandle, err := sm.mgr.OpenService(serviceName)
+	if err != nil {
+		return svc.State(0), err
+	}
+	defer svcHandle.Close()
+
+	status, err := svcHandle.Query()
+	if err != nil {
+		return svc.State(0), err
+	}
+	return status.State, nil
+}
+
+func (sm *LocalServiceManager) Close() error {
+	return sm.mgr.Disconnect()
+}
+
+func NewRemoteServiceManager(hostname, ip string) (*RemoteServiceManager, error) {
+	scm, err := connectToRemoteSCM(hostname, ip)
+	if err != nil {
+		return nil, err
+	}
+	return &RemoteServiceManager{mgr: scm}, nil
+}
+
+func (r *RemoteServiceManager) Query(serviceName string) (svc.State, error) {
+	if r.mgr == nil {
+		return 0, fmt.Errorf("service manager is not initialized")
+	}
+
+	svcHandle, err := r.mgr.OpenService(serviceName)
+	if err != nil {
+		if err == windows.ERROR_SERVICE_DOES_NOT_EXIST {
+			return 0, fmt.Errorf("service %q does not exist", serviceName)
+		}
+		return 0, fmt.Errorf("failed to open service %q: %w", serviceName, err)
+	}
+	defer svcHandle.Close()
+
+	status, err := svcHandle.Query()
+	if err != nil {
+		return 0, fmt.Errorf("failed to query service %q: %w", serviceName, err)
+	}
+
+	return status.State, nil
+}
+
+func (r *RemoteServiceManager) Start(serviceName string) error {
+	svcHandle, err := r.mgr.OpenService(serviceName)
+	if err != nil {
+		return fmt.Errorf("failed to open service %q: %w", serviceName, err)
+	}
+	defer svcHandle.Close()
+
+	return svcHandle.Start()
+}
+
+func (r *RemoteServiceManager) Stop(serviceName string) error {
+	svcHandle, err := r.mgr.OpenService(serviceName)
+	if err != nil {
+		return fmt.Errorf("failed to open service %q: %w", serviceName, err)
+	}
+	defer svcHandle.Close()
+	_, errorStop := svcHandle.Control(svc.Stop)
+	return errorStop
+}
+
+func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delaySeconds int) error {
+	svcHandle, err := r.mgr.OpenService(serviceName)
+	if err != nil {
+		return err
+	}
+	defer svcHandle.Close()
+
+	for range attempts {
+
+		_, err = svcHandle.Control(svc.Stop)
+		if err != nil {
+			return fmt.Errorf("failed to stop %q: %w", serviceName, err)
+		}
+		time.Sleep(time.Duration(delaySeconds) * time.Second)
+
+		err = svcHandle.Start()
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("failed to restart %q after %d attempts", serviceName, attempts)
+}
+
+func (r *RemoteServiceManager) Close() error {
+	return r.mgr.Disconnect()
+}
+
 func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 	if err := verifyHostnameIPMapping(hostname, ip); err != nil {
 		log.Printf("Warning: hostname '%s' does not resolve to IP '%s': '%v'", hostname, ip, err)
