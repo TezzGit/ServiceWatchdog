@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -15,21 +16,25 @@ import (
 const RPC_PORT = "135"
 
 type ServiceManager interface {
-	Restart(serviceName string, attempts int, delaySeconds int) error
+	Restart(serviceName string, attempts int, delay int) error
 	Start(serviceName string) error
 	Stop(serviceName string) error
 	Query(serviceName string) (svc.State, error)
 	Close() error
 }
 
-type LocalServiceManager struct {
+type baseServiceManager struct {
 	mgr *mgr.Mgr
 }
 
+type LocalServiceManager struct {
+	baseServiceManager
+}
+
 type RemoteServiceManager struct {
+	baseServiceManager
 	Host string
 	IP   string
-	mgr  *mgr.Mgr
 }
 
 func NewLocalServiceManager() (*LocalServiceManager, error) {
@@ -37,67 +42,7 @@ func NewLocalServiceManager() (*LocalServiceManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
 	}
-	return &LocalServiceManager{mgr: m}, nil
-}
-
-func (sm *LocalServiceManager) Restart(serviceName string, attempts int, delay int) error {
-	svcHandle, err := sm.mgr.OpenService(serviceName)
-	if err != nil {
-		return err
-	}
-	defer svcHandle.Close()
-
-	for range attempts {
-
-		_, err = svcHandle.Control(svc.Stop)
-		if err != nil {
-			return fmt.Errorf("failed to stop %q: %w", serviceName, err)
-		}
-		time.Sleep(time.Duration(delay) * time.Second)
-
-		err = svcHandle.Start()
-		if err == nil {
-			return nil
-		}
-	}
-	return fmt.Errorf("failed to restart %q after %d attempts", serviceName, attempts)
-}
-
-func (sm *LocalServiceManager) Start(serviceName string) error {
-	svcHandle, err := sm.mgr.OpenService(serviceName)
-	if err != nil {
-		return err
-	}
-	defer svcHandle.Close()
-	return svcHandle.Start()
-}
-
-func (sm *LocalServiceManager) Stop(serviceName string) error {
-	svcHandle, err := sm.mgr.OpenService(serviceName)
-	if err != nil {
-		return err
-	}
-	defer svcHandle.Close()
-	_, err = svcHandle.Control(svc.Stop)
-	return err
-}
-
-func (sm *LocalServiceManager) Query(serviceName string) (svc.State, error) {
-	svcHandle, err := sm.mgr.OpenService(serviceName)
-	if err != nil {
-		return svc.State(0), err
-	}
-	defer svcHandle.Close()
-
-	status, err := svcHandle.Query()
-	if err != nil {
-		return svc.State(0), err
-	}
-	return status.State, nil
-}
-
-func (sm *LocalServiceManager) Close() error {
-	return sm.mgr.Disconnect()
+	return &LocalServiceManager{baseServiceManager{mgr: m}}, nil
 }
 
 func NewRemoteServiceManager(hostname, ip string) (*RemoteServiceManager, error) {
@@ -105,76 +50,113 @@ func NewRemoteServiceManager(hostname, ip string) (*RemoteServiceManager, error)
 	if err != nil {
 		return nil, err
 	}
-	return &RemoteServiceManager{mgr: scm}, nil
+	return &RemoteServiceManager{
+		baseServiceManager: baseServiceManager{mgr: scm},
+		Host:               hostname,
+		IP:                 ip,
+	}, nil
 }
 
-func (r *RemoteServiceManager) Query(serviceName string) (svc.State, error) {
-	if r.mgr == nil {
-		return 0, fmt.Errorf("service manager is not initialized")
-	}
-
-	svcHandle, err := r.mgr.OpenService(serviceName)
-	if err != nil {
-		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return 0, fmt.Errorf("service %q does not exist", serviceName)
-		}
-		return 0, fmt.Errorf("failed to open service %q: %w", serviceName, err)
-	}
-	defer svcHandle.Close()
-
-	status, err := svcHandle.Query()
-	if err != nil {
-		return 0, fmt.Errorf("failed to query service %q: %w", serviceName, err)
-	}
-
-	return status.State, nil
+func (b *baseServiceManager) openService(name string) (*mgr.Service, error) {
+	return b.mgr.OpenService(name)
 }
 
-func (r *RemoteServiceManager) Start(serviceName string) error {
-	svcHandle, err := r.mgr.OpenService(serviceName)
+func (b *baseServiceManager) startService(name string) error {
+	svcHandle, err := b.openService(name)
 	if err != nil {
-		return fmt.Errorf("failed to open service %q: %w", serviceName, err)
+		return err
 	}
 	defer svcHandle.Close()
-
 	return svcHandle.Start()
 }
 
-func (r *RemoteServiceManager) Stop(serviceName string) error {
-	svcHandle, err := r.mgr.OpenService(serviceName)
+func (b *baseServiceManager) stopService(name string) error {
+	svcHandle, err := b.openService(name)
 	if err != nil {
-		return fmt.Errorf("failed to open service %q: %w", serviceName, err)
+		return err
 	}
 	defer svcHandle.Close()
 	_, err = svcHandle.Control(svc.Stop)
 	return err
 }
 
-func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delaySeconds int) error {
-	svcHandle, err := r.mgr.OpenService(serviceName)
+func (b *baseServiceManager) queryService(name string) (svc.State, error) {
+	svcHandle, err := b.openService(name)
+	if err != nil {
+		return 0, err
+	}
+	defer svcHandle.Close()
+	status, err := svcHandle.Query()
+	if err != nil {
+		return 0, err
+	}
+	return status.State, nil
+}
+
+func (b *baseServiceManager) restartService(name string, attempts int, delay int) error {
+	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
 	}
 	defer svcHandle.Close()
 
-	for range attempts {
-
+	for range int(attempts) {
 		_, err = svcHandle.Control(svc.Stop)
-		if err != nil {
-			return fmt.Errorf("failed to stop %q: %w", serviceName, err)
+		if err != nil && !isIgnorableStopError(err) {
+			return fmt.Errorf("failed to stop %q: %w", name, err)
 		}
-		time.Sleep(time.Duration(delaySeconds) * time.Second)
-
+		time.Sleep(time.Duration(delay) * time.Second)
 		err = svcHandle.Start()
 		if err == nil {
 			return nil
 		}
+		time.Sleep(time.Duration(delay) * time.Second)
 	}
-	return fmt.Errorf("failed to restart %q after %d attempts", serviceName, attempts)
+	return fmt.Errorf("failed to restart %q after %d attempts", name, attempts)
+}
+
+func (b *baseServiceManager) close() error {
+	return b.mgr.Disconnect()
+}
+
+func (l *LocalServiceManager) Restart(serviceName string, attempts int, delay int) error {
+	return l.restartService(serviceName, attempts, delay)
+}
+
+func (l *LocalServiceManager) Start(serviceName string) error {
+	return l.startService(serviceName)
+}
+
+func (l *LocalServiceManager) Stop(serviceName string) error {
+	return l.stopService(serviceName)
+}
+
+func (l *LocalServiceManager) Query(serviceName string) (svc.State, error) {
+	return l.queryService(serviceName)
+}
+
+func (l *LocalServiceManager) Close() error {
+	return l.close()
+}
+
+func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delay int) error {
+	return r.restartService(serviceName, attempts, delay)
+}
+
+func (r *RemoteServiceManager) Start(serviceName string) error {
+	return r.startService(serviceName)
+}
+
+func (r *RemoteServiceManager) Stop(serviceName string) error {
+	return r.stopService(serviceName)
+}
+
+func (r *RemoteServiceManager) Query(serviceName string) (svc.State, error) {
+	return r.queryService(serviceName)
 }
 
 func (r *RemoteServiceManager) Close() error {
-	return r.mgr.Disconnect()
+	return r.close()
 }
 
 func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
@@ -227,10 +209,8 @@ func verifyHostnameIPMapping(hostname, expectedIP string) error {
 	if err != nil {
 		return fmt.Errorf("DNS resolution failed: %w", err)
 	}
-	for _, resolved := range ips {
-		if resolved == expectedIP {
-			return nil // match found
-		}
+	if slices.Contains(ips, expectedIP) {
+		return nil // match found
 	}
 	return fmt.Errorf("IP '%s' not found in DNS records for hostname '%s'", expectedIP, hostname)
 }
@@ -246,3 +226,10 @@ func testTCPConnectivity(target string) error {
 
 	return nil
 }
+
+func isIgnorableStopError(err error) bool {
+	return errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE)
+}
+
+var _ ServiceManager = (*LocalServiceManager)(nil)
+var _ ServiceManager = (*RemoteServiceManager)(nil)
