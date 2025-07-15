@@ -8,10 +8,10 @@ import (
 )
 
 type healthStatus struct {
-	Name         string
-	IsDependency bool
-	Running      bool
-	Err          error
+	Name    string
+	Type    string
+	Running bool
+	Err     error
 }
 
 // Cache Dependency Health Status to Avoid Per Service Call
@@ -27,25 +27,26 @@ func newHealthCache() *healthCache {
 func (hc *healthCache) GetOrRun(dep Dependency, fn func() (bool, error)) healthStatus {
 	key := DependencyKey(dep)
 
-	hc.mu.Lock()
-	if result, exists := hc.results[key]; exists {
-		hc.mu.Unlock()
+	hc.mu.RLock()
+	result, exists := hc.results[key]
+	hc.mu.RUnlock()
+	if exists {
 		return result
 	}
-	hc.mu.Unlock()
 
 	// Run and store
 	healthy, err := fn()
 	status := healthStatus{
-		Name:         dep.Name,
-		IsDependency: true,
-		Running:      healthy,
-		Err:          err,
+		Name:    dep.Name,
+		Type:    "dependency",
+		Running: healthy,
+		Err:     err,
 	}
 
 	hc.mu.Lock()
 	hc.results[key] = status
 	hc.mu.Unlock()
+
 	return status
 }
 

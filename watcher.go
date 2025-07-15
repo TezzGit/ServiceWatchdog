@@ -72,12 +72,11 @@ func (sw *serviceWatcher) runHealthChecks() {
 				log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
 
 				// Recovery Functionality
-				if result.IsDependency {
+				if result.Type == "dependency" {
 					// Dependency Handling
 					continue
 				}
 				svc.Recover()
-
 			}
 		}
 	}
