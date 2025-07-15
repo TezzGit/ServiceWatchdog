@@ -13,6 +13,12 @@ type serviceWatcher struct {
 	Services []Service   `json:"services"`
 }
 
+type RecoveryContext struct {
+	ServiceName string
+	Services    ServiceManager
+	Email       EmailConfig
+}
+
 func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)
@@ -60,6 +66,7 @@ func (m *serviceWatcher) Execute(args []string, r <-chan svc.ChangeRequest, stat
 
 func (sw *serviceWatcher) runHealthChecks() {
 	cache := newHealthCache()
+
 	for _, svc := range sw.Services {
 		results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
 		if err != nil {
@@ -76,8 +83,25 @@ func (sw *serviceWatcher) runHealthChecks() {
 					// Dependency Handling
 					continue
 				}
-				svc.Recover()
+
+				ctx := RecoveryContext{
+					ServiceName: svc.Name,
+					Services:    mustLocalServiceManager(),
+					Email:       sw.Email,
+				}
+
+				if err := svc.Recover(ctx); err != nil {
+					log.Printf("Recovery failed for %s: %v", svc.Name, err)
+				}
 			}
 		}
 	}
+}
+
+func mustLocalServiceManager() ServiceManager {
+	mgr, err := NewLocalServiceManager()
+	if err != nil {
+		log.Fatalf("failed to connect to local SCM: %v", err)
+	}
+	return mgr
 }

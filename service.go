@@ -15,11 +15,6 @@ type Service struct {
 	RecoverySequence []RecoveryStep `json:"recovery_sequence"`
 }
 
-type RecoveryContext struct {
-	ServiceName string
-	Services    ServiceManager
-}
-
 func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]healthStatus, error) {
 	manager, err := NewLocalServiceManager()
 	if err != nil {
@@ -85,18 +80,13 @@ func (s *Service) validate() error {
 	return nil
 }
 
-func (s *Service) Recover() error {
+func (s *Service) Recover(ctx RecoveryContext) error {
 	// Run Recovery Sequence
 	svcMgr, err := NewLocalServiceManager()
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
-	defer svcMgr.mgr.Disconnect()
-
-	ctx := RecoveryContext{
-		ServiceName: s.Name,
-		Services:    svcMgr,
-	}
+	defer svcMgr.Close()
 
 	for _, step := range s.RecoverySequence {
 		if err := step.Execute(ctx); err != nil {
