@@ -46,7 +46,7 @@ func NewLocalServiceManager() (*LocalServiceManager, error) {
 }
 
 func NewRemoteServiceManager(hostname, ip string) (*RemoteServiceManager, error) {
-	scm, err := connectToRemoteSCM(hostname, ip)
+	scm, err := connectRemoteSCM(hostname, ip)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (b *baseServiceManager) openService(name string) (*mgr.Service, error) {
 	return b.mgr.OpenService(name)
 }
 
-func (b *baseServiceManager) startService(name string) error {
+func (b *baseServiceManager) Start(name string) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func (b *baseServiceManager) startService(name string) error {
 	return svcHandle.Start()
 }
 
-func (b *baseServiceManager) stopService(name string) error {
+func (b *baseServiceManager) Stop(name string) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -80,7 +80,7 @@ func (b *baseServiceManager) stopService(name string) error {
 	return err
 }
 
-func (b *baseServiceManager) queryService(name string) (svc.State, error) {
+func (b *baseServiceManager) Query(name string) (svc.State, error) {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return 0, err
@@ -93,7 +93,7 @@ func (b *baseServiceManager) queryService(name string) (svc.State, error) {
 	return status.State, nil
 }
 
-func (b *baseServiceManager) restartService(name string, attempts int, delay int) error {
+func (b *baseServiceManager) Restart(name string, attempts int, delay int) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -115,58 +115,18 @@ func (b *baseServiceManager) restartService(name string, attempts int, delay int
 	return fmt.Errorf("failed to restart %q after %d attempts", name, attempts)
 }
 
-func (b *baseServiceManager) close() error {
+func (b *baseServiceManager) Close() error {
 	return b.mgr.Disconnect()
 }
 
-func (l *LocalServiceManager) Restart(serviceName string, attempts int, delay int) error {
-	return l.restartService(serviceName, attempts, delay)
-}
-
-func (l *LocalServiceManager) Start(serviceName string) error {
-	return l.startService(serviceName)
-}
-
-func (l *LocalServiceManager) Stop(serviceName string) error {
-	return l.stopService(serviceName)
-}
-
-func (l *LocalServiceManager) Query(serviceName string) (svc.State, error) {
-	return l.queryService(serviceName)
-}
-
-func (l *LocalServiceManager) Close() error {
-	return l.close()
-}
-
-func (r *RemoteServiceManager) Restart(serviceName string, attempts int, delay int) error {
-	return r.restartService(serviceName, attempts, delay)
-}
-
-func (r *RemoteServiceManager) Start(serviceName string) error {
-	return r.startService(serviceName)
-}
-
-func (r *RemoteServiceManager) Stop(serviceName string) error {
-	return r.stopService(serviceName)
-}
-
-func (r *RemoteServiceManager) Query(serviceName string) (svc.State, error) {
-	return r.queryService(serviceName)
-}
-
-func (r *RemoteServiceManager) Close() error {
-	return r.close()
-}
-
-func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
+func connectRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 	if err := verifyHostnameIPMapping(hostname, ip); err != nil {
 		log.Printf("Warning: hostname '%s' does not resolve to IP '%s': '%v'", hostname, ip, err)
 	}
 
 	// Try Hostname
 	if err := testTCPConnectivity(hostname); err == nil {
-		if scm, err := tryConnectSCM(hostname); err == nil {
+		if scm, err := openRemoteSCM(hostname); err == nil {
 			return scm, nil
 		} else {
 			log.Printf("Failed to connect to SCM via hostname '%s': '%v'", hostname, err)
@@ -177,7 +137,7 @@ func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 
 	// Try IP
 	if err := testTCPConnectivity(ip); err == nil {
-		if scm, err := tryConnectSCM(ip); err == nil {
+		if scm, err := openRemoteSCM(ip); err == nil {
 			return scm, nil
 		} else {
 			log.Printf("Failed to connect to SCM via IP '%s': '%v'", ip, err)
@@ -188,7 +148,7 @@ func connectToRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {
 	return nil, fmt.Errorf("failed to connect to SCM using hostname '%s' and IP '%s'", hostname, ip)
 }
 
-func tryConnectSCM(target string) (*mgr.Mgr, error) {
+func openRemoteSCM(target string) (*mgr.Mgr, error) {
 	if target == "" {
 		return nil, errors.New("SCM target is empty")
 	}

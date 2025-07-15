@@ -1,6 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"log"
+	"os/exec"
+	"time"
+)
 
 type RecoveryActionType string
 
@@ -32,6 +38,8 @@ type RunScriptAction struct {
 
 type SendEmailAction struct {
 	OnFailure string `json:"on_failure"`
+	Body      string `json:"body,omitempty"`
+	Subject   string `json:"subject,omitempty"`
 }
 
 // Validate Recovery Steps
@@ -73,12 +81,35 @@ func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
 	case RestartService:
 		return ctx.Services.Restart(ctx.ServiceName, r.RestartService.MaxAttempts, r.RestartService.DelayBetweenAttempts)
 	case RunScript:
-		// TODO: Execute Script Behaviour
-		return fmt.Errorf("not implemented: %s", r.Type)
+		return r.RunScript.RunScript()
 	case SendEmail:
-		// TODO: Execute Email Sender Behaviour
-		return fmt.Errorf("not implemented: %s", r.Type)
+		return r.SendEmail.SendEmail(ctx.Email)
 	default:
 		return fmt.Errorf("unknown recovery type: %s", r.Type)
 	}
+}
+
+func (r *RunScriptAction) RunScript() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, r.ScriptPath, r.Args...)
+	output, err := cmd.CombinedOutput()
+
+	log.Printf("Running script: %s %v", r.ScriptPath, r.Args)
+	log.Printf("Output:\n%s", output)
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("script execution timed out after %d seconds", r.TimeoutSeconds)
+	}
+
+	if err != nil {
+		return fmt.Errorf("script failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SendEmailAction) SendEmail(config EmailConfig) error {
+	return fmt.Errorf("not implemented yet")
 }
