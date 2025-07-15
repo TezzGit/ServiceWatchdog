@@ -69,5 +69,16 @@ func (r *RecoveryStep) getOnFailureAction() string {
 }
 
 func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
-	return nil
+	switch r.Type {
+	case RestartService:
+		return ctx.Services.Restart(ctx.ServiceName, r.RestartService.MaxAttempts, r.RestartService.DelayBetweenAttempts)
+	case RunScript:
+		// TODO: Execute Script Behaviour
+		return fmt.Errorf("not implemented: %s", r.Type)
+	case SendEmail:
+		// TODO: Execute Email Sender Behaviour
+		return fmt.Errorf("not implemented: %s", r.Type)
+	default:
+		return fmt.Errorf("unknown recovery type: %s", r.Type)
+	}
 }
