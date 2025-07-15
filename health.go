@@ -16,7 +16,7 @@ type healthStatus struct {
 
 // Cache Dependency Health Status to Avoid Per Service Call
 type healthCache struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	results map[DependencyKey]healthStatus
 }
 
