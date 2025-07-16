@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"net/smtp"
 	"os/exec"
+	"strconv"
+	"syscall"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 type RecoveryActionType string
@@ -110,6 +117,70 @@ func (r *RunScriptAction) RunScript() error {
 	return nil
 }
 
-func (s *SendEmailAction) SendEmail(config EmailConfig) error {
-	return fmt.Errorf("not implemented yet")
+func (s *SendEmailAction) SendEmail(cfg EmailConfig) error {
+	// Decrypt password
+	encBytes, err := base64.StdEncoding.DecodeString(cfg.Password)
+	if err != nil {
+		return fmt.Errorf("base64 decode failed: %w", err)
+	}
+
+	decBytes, err := Decrypt(encBytes)
+	if err != nil {
+		return fmt.Errorf("dpapi decrypt failed: %w", err)
+	}
+
+	auth := smtp.PlainAuth("", cfg.From, string(decBytes), cfg.SMTPServer)
+
+	// Prefer SendEmailAction's Subject but Handle for Global
+	subject := s.Subject
+	if subject == "" {
+		subject = cfg.Subject
+	}
+
+	body := s.Body
+	if body == "" {
+		body = "Urgent: %q has failed to recover and is not running"
+	}
+
+	msg := []byte(fmt.Sprintf(
+		"From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s",
+		cfg.From, cfg.To, subject, body,
+	))
+
+	addr := cfg.SMTPServer + ":" + strconv.Itoa(cfg.SMTPPort)
+	if err := smtp.SendMail(addr, auth, cfg.From, []string{cfg.To}, msg); err != nil {
+		return fmt.Errorf("smtp send failed: %w", err)
+	}
+
+	log.Printf("Email sent to %s", cfg.To)
+	return nil
+}
+
+func Decrypt(encrypted []byte) ([]byte, error) {
+	var out windows.DataBlob
+	var in windows.DataBlob
+
+	in.Size = uint32(len(encrypted))
+	if len(encrypted) > 0 {
+		in.Data = &encrypted[0]
+	}
+
+	r, _, err := syscall.NewLazyDLL("crypt32.dll").
+		NewProc("CryptUnprotectData").
+		Call(
+			uintptr(unsafe.Pointer(&in)),
+			0,
+			0,
+			0,
+			0,
+			0,
+			uintptr(unsafe.Pointer(&out)),
+		)
+
+	if r == 0 {
+		return nil, err
+	}
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
+
+	return unsafe.Slice(out.Data, out.Size), nil
 }

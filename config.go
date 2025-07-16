@@ -8,6 +8,7 @@ import (
 type EmailConfig struct {
 	From       string `json:"from"`
 	To         string `json:"to"`
+	Password   string `json:"encrypted_pass"`
 	Subject    string `json:"subject"`
 	SMTPServer string `json:"smtp_server"`
 	SMTPPort   int    `json:"smtp_port"`
