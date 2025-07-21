@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Dependencies Not Required
@@ -13,6 +14,12 @@ type Service struct {
 	Name             string         `json:"name"`
 	Dependencies     []Dependency   `json:"dependencies,omitempty"`
 	RecoverySequence []RecoveryStep `json:"recovery_sequence"`
+
+	RetryDelaySeconds int `json:"retry_delay_seconds,omitempty"`
+	MaxRetries        int `json:"max_retries,omitempty"`
+
+	lastUnhealthyAt time.Time `json:"-"`
+	retryCount      int       `json:"-"`
 }
 
 func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]healthStatus, error) {
@@ -97,4 +104,40 @@ func (s *Service) Recover(ctx RecoveryContext) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) RetryDelay() time.Duration {
+	if s.RetryDelaySeconds <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(s.RetryDelaySeconds) * time.Second
+}
+
+func (s *Service) MaxRetryCount() int {
+	if s.MaxRetries <= 0 {
+		return 3
+	}
+	return s.MaxRetries
+}
+
+func (s *Service) ResetHealthyTracking() {
+	s.lastUnhealthyAt = time.Time{}
+	s.retryCount = 0
+}
+
+func (s *Service) IncrementRetry(now time.Time) {
+	s.lastUnhealthyAt = now
+	s.retryCount++
+}
+
+func (s *Service) InsideDebounceWindow(now time.Time) bool {
+	return now.Sub(s.lastUnhealthyAt) < s.RetryDelay()
+}
+
+func (s *Service) ExceededAttempts() bool {
+	return s.retryCount >= s.MaxRetryCount()
+}
+
+func (s *Service) CurrentAttempt() int {
+	return s.retryCount
 }

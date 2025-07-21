@@ -12,6 +12,8 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
+
+	// TODO: improve buffer - account for all potential dependencies aswell.
 	errCh := make(chan error, len(watcher.Services))
 
 	// 🔹 Step 1: Validate unique dependencies
@@ -21,6 +23,7 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 		wg.Add(1)
 		go func(dep Dependency, key DependencyKey) {
 			defer wg.Done()
+
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
