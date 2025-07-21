@@ -69,11 +69,11 @@ func (sw *serviceWatcher) runHealthChecks() {
 	now := time.Now()
 
 	for _, svc := range sw.Services {
-		sw.checkServiceHealth(svc, cache, now)
+		sw.checkServiceHealth(&svc, cache, now)
 	}
 }
 
-func (sw *serviceWatcher) checkServiceHealth(svc Service, cache *healthCache, now time.Time) {
+func (sw *serviceWatcher) checkServiceHealth(svc *Service, cache *healthCache, now time.Time) {
 	results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
 	if err != nil {
 		log.Printf("Health check failed for %s: %v", svc.Name, err)
@@ -85,7 +85,7 @@ func (sw *serviceWatcher) checkServiceHealth(svc Service, cache *healthCache, no
 	}
 }
 
-func (sw *serviceWatcher) handleHealthCheckResult(svc Service, result healthStatus, now time.Time) {
+func (sw *serviceWatcher) handleHealthCheckResult(svc *Service, result healthStatus, now time.Time) {
 	if result.Running {
 		if result.Type == "service" {
 			svc.ResetHealthyTracking()
@@ -120,7 +120,7 @@ func (sw *serviceWatcher) handleHealthCheckResult(svc Service, result healthStat
 	}
 }
 
-func (sw *serviceWatcher) attemptRecovery(svc Service) {
+func (sw *serviceWatcher) attemptRecovery(svc *Service) {
 	// Recovery Functionality
 	ctx := RecoveryContext{
 		ServiceName: svc.Name,
