@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Watchdog/pkg/crypto"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -40,11 +41,11 @@ type RunScriptAction struct {
 }
 
 type SendEmailAction struct {
-	OnFailure      string     `json:"on_failure"`
-	Body           string     `json:"body,omitempty"`
-	Subject        string     `json:"subject,omitempty"`
-	EncryptionType string     `json:"encryption_type,omitempty"`
-	Encryption     Encryption `json:"-"`
+	OnFailure      string            `json:"on_failure"`
+	Body           string            `json:"body,omitempty"`
+	Subject        string            `json:"subject,omitempty"`
+	EncryptionType string            `json:"encryption_type,omitempty"`
+	Encryption     crypto.Encryption `json:"-"`
 }
 
 // Validate Recovery Steps
@@ -63,9 +64,9 @@ func (r *RecoveryStep) Validate() error {
 			return fmt.Errorf("missing or invalid restart_service action")
 		}
 
-		enc, err := NewEncryption(r.SendEmail.EncryptionType)
+		enc, err := crypto.NewEncryption(r.SendEmail.EncryptionType)
 		if err != nil {
-			r.SendEmail.Encryption, err = NewEncryption("")
+			r.SendEmail.Encryption, err = crypto.NewEncryption("")
 			return fmt.Errorf("default encryption init failed: %w", err)
 		}
 		r.SendEmail.Encryption = enc
