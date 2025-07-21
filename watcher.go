@@ -19,7 +19,7 @@ type RecoveryContext struct {
 	Email       EmailConfig
 }
 
-func runWacherService(name string, isDebug bool, watcher *serviceWatcher) {
+func runWatcherService(name string, isDebug bool, watcher *serviceWatcher) {
 	if isDebug {
 		err := debug.Run(name, watcher)
 		if err != nil {

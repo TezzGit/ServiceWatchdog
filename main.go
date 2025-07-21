@@ -23,5 +23,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
-	runWacherService("serviceWatcher", DEBUG_MODE, watcher)
+	runWatcherService("serviceWatcher", DEBUG_MODE, watcher)
 }
