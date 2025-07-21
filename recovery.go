@@ -8,11 +8,7 @@ import (
 	"net/smtp"
 	"os/exec"
 	"strconv"
-	"syscall"
 	"time"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 type RecoveryActionType string
@@ -44,9 +40,11 @@ type RunScriptAction struct {
 }
 
 type SendEmailAction struct {
-	OnFailure string `json:"on_failure"`
-	Body      string `json:"body,omitempty"`
-	Subject   string `json:"subject,omitempty"`
+	OnFailure      string     `json:"on_failure"`
+	Body           string     `json:"body,omitempty"`
+	Subject        string     `json:"subject,omitempty"`
+	EncryptionType string     `json:"encryption_type,omitempty"`
+	Encryption     Encryption `json:"-"`
 }
 
 // Validate Recovery Steps
@@ -60,7 +58,20 @@ func (r *RecoveryStep) Validate() error {
 		if r.RunScript == nil || r.RunScript.ScriptPath == "" {
 			return fmt.Errorf("missing run_script config")
 		}
+	case SendEmail:
+		if r.SendEmail == nil {
+			return fmt.Errorf("missing or invalid restart_service action")
+		}
+
+		enc, err := NewEncryption(r.SendEmail.EncryptionType)
+		if err != nil {
+			r.SendEmail.Encryption, err = NewEncryption("")
+			return fmt.Errorf("default encryption init failed: %w", err)
+		}
+		r.SendEmail.Encryption = enc
+		return nil
 	}
+
 	return nil
 }
 
@@ -90,7 +101,7 @@ func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
 	case RunScript:
 		return r.RunScript.RunScript()
 	case SendEmail:
-		return r.SendEmail.SendEmail(ctx.Email)
+		return r.SendEmail.SendEmail(ctx.Email, ctx.ServiceName)
 	default:
 		return fmt.Errorf("unknown recovery type: %s", r.Type)
 	}
@@ -117,14 +128,14 @@ func (r *RunScriptAction) RunScript() error {
 	return nil
 }
 
-func (s *SendEmailAction) SendEmail(cfg EmailConfig) error {
+func (s *SendEmailAction) SendEmail(cfg EmailConfig, svcName string) error {
 	// Decrypt password
 	encBytes, err := base64.StdEncoding.DecodeString(cfg.Password)
 	if err != nil {
 		return fmt.Errorf("base64 decode failed: %w", err)
 	}
 
-	decBytes, err := Decrypt(encBytes)
+	decBytes, err := s.Encryption.Decrypt(encBytes)
 	if err != nil {
 		return fmt.Errorf("dpapi decrypt failed: %w", err)
 	}
@@ -139,7 +150,7 @@ func (s *SendEmailAction) SendEmail(cfg EmailConfig) error {
 
 	body := s.Body
 	if body == "" {
-		body = "Urgent: %q has failed to recover and is not running"
+		body = fmt.Sprintf("Urgent: %q has failed to recover and is not running", svcName)
 	}
 
 	msg := []byte(fmt.Sprintf(
@@ -154,33 +165,4 @@ func (s *SendEmailAction) SendEmail(cfg EmailConfig) error {
 
 	log.Printf("Email sent to %s", cfg.To)
 	return nil
-}
-
-func Decrypt(encrypted []byte) ([]byte, error) {
-	var out windows.DataBlob
-	var in windows.DataBlob
-
-	in.Size = uint32(len(encrypted))
-	if len(encrypted) > 0 {
-		in.Data = &encrypted[0]
-	}
-
-	r, _, err := syscall.NewLazyDLL("crypt32.dll").
-		NewProc("CryptUnprotectData").
-		Call(
-			uintptr(unsafe.Pointer(&in)),
-			0,
-			0,
-			0,
-			0,
-			0,
-			uintptr(unsafe.Pointer(&out)),
-		)
-
-	if r == 0 {
-		return nil, err
-	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
-
-	return unsafe.Slice(out.Data, out.Size), nil
 }

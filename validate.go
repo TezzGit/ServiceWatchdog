@@ -23,7 +23,6 @@ func validateConfig(watcher *serviceWatcher, maxConcurrent int) error {
 		wg.Add(1)
 		go func(dep Dependency, key DependencyKey) {
 			defer wg.Done()
-
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
