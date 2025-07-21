@@ -69,62 +69,71 @@ func (sw *serviceWatcher) runHealthChecks() {
 	now := time.Now()
 
 	for _, svc := range sw.Services {
-		results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
-		if err != nil {
-			log.Printf("Health check failed for %s: %v", svc.Name, err)
-			continue
-		}
+		sw.checkServiceHealth(svc, cache, now)
+	}
+}
 
-		for _, result := range results {
+func (sw *serviceWatcher) checkServiceHealth(svc Service, cache *healthCache, now time.Time) {
+	results, err := svc.HealthCheck(MAX_CONCURRENT, cache)
+	if err != nil {
+		log.Printf("Health check failed for %s: %v", svc.Name, err)
+		return
+	}
 
-			if result.Running {
-				if result.Type == "service" {
-					svc.ResetHealthyTracking()
-					continue
-				}
-			}
+	for _, result := range results {
+		sw.handleHealthCheckResult(svc, result, now)
+	}
+}
 
-			// Skip Dependency Healing
-			if result.Type == "dependency" {
-				// Dependency Handling
-				continue
-			}
-
-			log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
-
-			// First time unhealthy detected, initialise
-			if svc.CurrentAttempt() == 0 {
-				svc.IncrementRetry(now)
-				continue
-			}
-
-			// Are we in a Debounce Widnow
-			if svc.InsideDebounceWindow(now) {
-				continue
-			}
-			// Outside Debounce
-			svc.IncrementRetry(now)
-
-			// Check Exceeded Max Attempts
-			if svc.ExceededAttempts() {
-
-				// Recovery Functionality
-				ctx := RecoveryContext{
-					ServiceName: svc.Name,
-					Services:    mustLocalServiceManager(),
-					Email:       sw.Email,
-				}
-
-				if err := svc.Recover(ctx); err != nil {
-					log.Printf("Recovery failed for %s: %v", svc.Name, err)
-				}
-
-				// Reset Retry after Recovery Attempt
-				svc.ResetHealthyTracking()
-
-			}
+func (sw *serviceWatcher) handleHealthCheckResult(svc Service, result healthStatus, now time.Time) {
+	if result.Running {
+		if result.Type == "service" {
+			svc.ResetHealthyTracking()
+			return
 		}
 	}
+
+	// Skip Dependency Healing
+	if result.Type == "dependency" {
+		// Dependency Handling
+		return
+	}
+
+	log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
+
+	// First time unhealthy detected, initialise
+	if svc.CurrentAttempt() == 0 {
+		svc.IncrementRetry(now)
+		return
+	}
+
+	// Are we in a Debounce Widnow
+	if svc.InsideDebounceWindow(now) {
+		return
+	}
+	// Outside Debounce
+	svc.IncrementRetry(now)
+
+	// Check Exceeded Max Attempts
+	if svc.ExceededAttempts() {
+		sw.attemptRecovery(svc)
+	}
+}
+
+func (sw *serviceWatcher) attemptRecovery(svc Service) {
+	// Recovery Functionality
+	ctx := RecoveryContext{
+		ServiceName: svc.Name,
+		Services:    mustLocalServiceManager(),
+		Email:       sw.Email,
+	}
+
+	if err := svc.Recover(ctx); err != nil {
+		log.Printf("Recovery failed for %s: %v", svc.Name, err)
+	}
+
+	// Reset Retry after Recovery Attempt
+	svc.ResetHealthyTracking()
 }
 
 func mustLocalServiceManager() ServiceManager {
