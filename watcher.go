@@ -102,8 +102,8 @@ func (sw *serviceWatcher) handleHealthCheckResult(svc *Service, result healthSta
 	log.Printf("Unhealthy: %s (%v)", result.Name, result.Err)
 
 	// First time unhealthy detected, initialise
-	if svc.CurrentAttempt() == 0 {
-		svc.IncrementRetry(now)
+	if svc.CurrentQueryCount() == 0 {
+		svc.IncrementQueryCount(now)
 		return
 	}
 
@@ -112,10 +112,10 @@ func (sw *serviceWatcher) handleHealthCheckResult(svc *Service, result healthSta
 		return
 	}
 	// Outside Debounce
-	svc.IncrementRetry(now)
+	svc.IncrementQueryCount(now)
 
 	// Check Exceeded Max Attempts
-	if svc.ExceededAttempts() {
+	if svc.ExceededQueryCount() {
 		sw.attemptRecovery(svc)
 	}
 }

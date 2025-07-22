@@ -1,7 +1,7 @@
 {
   "email": {
     "from": "computer@computer.com.au",
-    "pass": "dpapi_encrypted_stub",
+    "pass": "plain_text",
     "encryption_type": "",
     "to": "support@support.com.au",
     "subject": "Service Watchdog Notification",
