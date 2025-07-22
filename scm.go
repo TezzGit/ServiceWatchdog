@@ -121,20 +121,17 @@ func (b *baseServiceManager) Close() error {
 }
 
 func (b *baseServiceManager) IsRunning(name string) (bool, error) {
-	svcHandle, err := b.openService(name)
-	if err != nil {
-		return false, err
-	}
-	defer svcHandle.Close()
 
-	status, err := svcHandle.Query()
+	state, err := b.Query(name)
+
 	if err != nil {
 		return false, err
 	}
 
-	if status.State == svc.Running {
+	if state == svc.Running {
 		return true, nil
 	}
+
 	return false, nil
 }
 
