@@ -20,6 +20,7 @@ type ServiceManager interface {
 	Start(serviceName string) error
 	Stop(serviceName string) error
 	Query(serviceName string) (svc.State, error)
+	IsRunning(serviceName string) (bool, error)
 	Close() error
 }
 
@@ -100,7 +101,7 @@ func (b *baseServiceManager) Restart(name string, attempts int, delay int) error
 	}
 	defer svcHandle.Close()
 
-	for range int(attempts) {
+	for range attempts {
 		_, err = svcHandle.Control(svc.Stop)
 		if err != nil && !isIgnorableStopError(err) {
 			return fmt.Errorf("failed to stop %q: %w", name, err)
@@ -117,6 +118,24 @@ func (b *baseServiceManager) Restart(name string, attempts int, delay int) error
 
 func (b *baseServiceManager) Close() error {
 	return b.mgr.Disconnect()
+}
+
+func (b *baseServiceManager) IsRunning(name string) (bool, error) {
+	svcHandle, err := b.openService(name)
+	if err != nil {
+		return false, err
+	}
+	defer svcHandle.Close()
+
+	status, err := svcHandle.Query()
+	if err != nil {
+		return false, err
+	}
+
+	if status.State == svc.Running {
+		return true, nil
+	}
+	return false, nil
 }
 
 func connectRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {

@@ -102,6 +102,14 @@ func (s *Service) Recover(ctx RecoveryContext) error {
 				return err
 			}
 		}
+		// If service recovers after a step end early
+		running, err := svcMgr.IsRunning(s.Name)
+		if err != nil {
+			return fmt.Errorf("failed to check if %w is running", err)
+		}
+		if running {
+			return nil
+		}
 	}
 	return nil
 }
