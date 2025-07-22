@@ -1,7 +1,6 @@
 package main
 
 import (
-	"Watchdog/pkg/crypto"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -41,11 +40,9 @@ type RunScriptAction struct {
 }
 
 type SendEmailAction struct {
-	OnFailure      string            `json:"on_failure"`
-	Body           string            `json:"body,omitempty"`
-	Subject        string            `json:"subject,omitempty"`
-	EncryptionType string            `json:"encryption_type,omitempty"`
-	Encryption     crypto.Encryption `json:"-"`
+	OnFailure string `json:"on_failure"`
+	Body      string `json:"body,omitempty"`
+	Subject   string `json:"subject,omitempty"`
 }
 
 // Validate Recovery Steps
@@ -61,16 +58,8 @@ func (r *RecoveryStep) Validate() error {
 		}
 	case SendEmail:
 		if r.SendEmail == nil {
-			return fmt.Errorf("missing or invalid restart_service action")
+			return fmt.Errorf("missing or invalid send_email action")
 		}
-
-		enc, err := crypto.NewEncryption(r.SendEmail.EncryptionType)
-		if err != nil {
-			r.SendEmail.Encryption, err = crypto.NewEncryption("")
-			return fmt.Errorf("default encryption init failed: %w", err)
-		}
-		r.SendEmail.Encryption = enc
-		return nil
 	}
 
 	return nil
@@ -136,7 +125,7 @@ func (s *SendEmailAction) SendEmail(cfg EmailConfig, svcName string) error {
 		return fmt.Errorf("base64 decode failed: %w", err)
 	}
 
-	decBytes, err := s.Encryption.Decrypt(encBytes)
+	decBytes, err := cfg.Encryption.Decrypt(encBytes)
 	if err != nil {
 		return fmt.Errorf("dpapi decrypt failed: %w", err)
 	}

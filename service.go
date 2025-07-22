@@ -141,3 +141,16 @@ func (s *Service) ExceededAttempts() bool {
 func (s *Service) CurrentAttempt() int {
 	return s.retryCount
 }
+
+func collectUniqueDependencies(services []Service) map[DependencyKey]Dependency {
+	unique := make(map[DependencyKey]Dependency)
+	for _, svc := range services {
+		for _, dep := range svc.Dependencies {
+			key := DependencyKey(dep) // ✅ idiomatic and quiets staticcheck
+			if _, exists := unique[key]; !exists {
+				unique[key] = dep
+			}
+		}
+	}
+	return unique
+}
