@@ -25,7 +25,7 @@ func newHealthCache() *healthCache {
 }
 
 func (hc *healthCache) GetOrRun(dep Dependency, fn func() (bool, error)) healthStatus {
-	key := DependencyKey(dep)
+	key := dep.Key()
 
 	hc.mu.RLock()
 	result, exists := hc.results[key]

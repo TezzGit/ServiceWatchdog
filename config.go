@@ -25,12 +25,14 @@ type EmailConfig struct {
 const TCP_TIMEOUT = 5
 const MAX_CONCURRENT = 10
 
-func loadConfig(path string) (*serviceWatcher, error) {
+func loadConfig(path string, resolver ServiceManagerResolver) (*serviceWatcher, error) {
 	// READ JSON
 	watcher, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}
+
+	watcher.InjectResolver(resolver)
 
 	// VALIDATE CONFIG
 	if err := validateConfig(watcher, MAX_CONCURRENT); err != nil {

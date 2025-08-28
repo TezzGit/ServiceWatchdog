@@ -24,18 +24,58 @@ type ServiceManager interface {
 	Close() error
 }
 
-type baseServiceManager struct {
+type LocalServiceManager struct {
 	mgr *mgr.Mgr
 }
 
-type LocalServiceManager struct {
-	baseServiceManager
-}
-
 type RemoteServiceManager struct {
-	baseServiceManager
+	*LocalServiceManager
 	Host string
 	IP   string
+}
+
+type SCMConnector interface {
+	ConnectLocal() (*mgr.Mgr, error)
+	ConnectRemote(hostname, ip string) (*mgr.Mgr, error)
+}
+
+type DefaultSCMConnector struct{}
+
+func (c *DefaultSCMConnector) ConnectLocal() (*mgr.Mgr, error) {
+	return mgr.Connect()
+}
+
+func (c *DefaultSCMConnector) ConnectRemote(hostname, ip string) (*mgr.Mgr, error) {
+	return connectRemoteSCM(hostname, ip)
+}
+
+type ServiceManagerResolver interface {
+	Resolve(location, ip string) (ServiceManager, error)
+}
+
+type DefaultServiceManagerResolver struct {
+	Connector SCMConnector
+}
+
+func (r *DefaultServiceManagerResolver) Resolve(location, ip string) (ServiceManager, error) {
+	if location == "" || location == "localhost" {
+		mgr, err := r.Connector.ConnectLocal()
+		if err != nil {
+			return nil, err
+		}
+		return &LocalServiceManager{mgr: mgr}, nil
+	}
+
+	mgr, err := r.Connector.ConnectRemote(location, ip)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RemoteServiceManager{
+		LocalServiceManager: &LocalServiceManager{mgr: mgr},
+		Host:                location,
+		IP:                  ip,
+	}, nil
 }
 
 func NewLocalServiceManager() (*LocalServiceManager, error) {
@@ -43,26 +83,14 @@ func NewLocalServiceManager() (*LocalServiceManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
 	}
-	return &LocalServiceManager{baseServiceManager{mgr: m}}, nil
+	return &LocalServiceManager{mgr: m}, nil
 }
 
-func NewRemoteServiceManager(hostname, ip string) (*RemoteServiceManager, error) {
-	scm, err := connectRemoteSCM(hostname, ip)
-	if err != nil {
-		return nil, err
-	}
-	return &RemoteServiceManager{
-		baseServiceManager: baseServiceManager{mgr: scm},
-		Host:               hostname,
-		IP:                 ip,
-	}, nil
-}
-
-func (b *baseServiceManager) openService(name string) (*mgr.Service, error) {
+func (b *LocalServiceManager) openService(name string) (*mgr.Service, error) {
 	return b.mgr.OpenService(name)
 }
 
-func (b *baseServiceManager) Start(name string) error {
+func (b *LocalServiceManager) Start(name string) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -71,7 +99,7 @@ func (b *baseServiceManager) Start(name string) error {
 	return svcHandle.Start()
 }
 
-func (b *baseServiceManager) Stop(name string) error {
+func (b *LocalServiceManager) Stop(name string) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -81,7 +109,7 @@ func (b *baseServiceManager) Stop(name string) error {
 	return err
 }
 
-func (b *baseServiceManager) Query(name string) (svc.State, error) {
+func (b *LocalServiceManager) Query(name string) (svc.State, error) {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return 0, err
@@ -94,7 +122,7 @@ func (b *baseServiceManager) Query(name string) (svc.State, error) {
 	return status.State, nil
 }
 
-func (b *baseServiceManager) Restart(name string, attempts int, delay int) error {
+func (b *LocalServiceManager) Restart(name string, attempts int, delay int) error {
 	svcHandle, err := b.openService(name)
 	if err != nil {
 		return err
@@ -107,20 +135,22 @@ func (b *baseServiceManager) Restart(name string, attempts int, delay int) error
 			return fmt.Errorf("failed to stop %q: %w", name, err)
 		}
 		time.Sleep(time.Duration(delay) * time.Second)
+
 		err = svcHandle.Start()
 		if err == nil {
 			return nil
 		}
 		time.Sleep(time.Duration(delay) * time.Second)
+
 	}
 	return fmt.Errorf("failed to restart %q after %d attempts", name, attempts)
 }
 
-func (b *baseServiceManager) Close() error {
+func (b *LocalServiceManager) Close() error {
 	return b.mgr.Disconnect()
 }
 
-func (b *baseServiceManager) IsRunning(name string) (bool, error) {
+func (b *LocalServiceManager) IsRunning(name string) (bool, error) {
 
 	state, err := b.Query(name)
 
@@ -133,6 +163,30 @@ func (b *baseServiceManager) IsRunning(name string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (r *RemoteServiceManager) Restart(name string, attempts int, delay int) error {
+	return r.LocalServiceManager.Restart(name, attempts, delay)
+}
+
+func (r *RemoteServiceManager) Start(name string) error {
+	return r.LocalServiceManager.Start(name)
+}
+
+func (r *RemoteServiceManager) Stop(name string) error {
+	return r.LocalServiceManager.Stop(name)
+}
+
+func (r *RemoteServiceManager) Query(name string) (svc.State, error) {
+	return r.LocalServiceManager.Query(name)
+}
+
+func (r *RemoteServiceManager) IsRunning(name string) (bool, error) {
+	return r.LocalServiceManager.IsRunning(name)
+}
+
+func (r *RemoteServiceManager) Close() error {
+	return r.LocalServiceManager.Close()
 }
 
 func connectRemoteSCM(hostname, ip string) (*mgr.Mgr, error) {

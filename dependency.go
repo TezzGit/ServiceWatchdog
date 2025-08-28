@@ -10,6 +10,7 @@ type Dependency struct {
 	Name     string `json:"name"`
 	Location string `json:"location,omitempty"`
 	IP       string `json:"ip,omitempty"`
+	Resolver ServiceManagerResolver
 }
 
 // Unique Dependencies
@@ -20,7 +21,21 @@ type DependencyKey struct {
 }
 
 func (d Dependency) Key() DependencyKey {
-	return DependencyKey(d)
+	return DependencyKey{
+		Name:     d.Name,
+		Location: d.Location,
+		IP:       d.IP,
+	}
+}
+
+func NewDependency(name, location, ip string, resolver ServiceManagerResolver) Dependency {
+	return Dependency{
+		Name:     name,
+		Location: location,
+		IP:       ip,
+		Resolver: resolver,
+	}
+
 }
 
 func (d *Dependency) Validate() error {
@@ -56,8 +71,8 @@ func (d *Dependency) HealthCheck() (bool, error) {
 }
 
 func (d *Dependency) resolveServiceManager() (ServiceManager, error) {
-	if d.Location == "localhost" || d.Location == "" {
-		return NewLocalServiceManager()
+	if d.Resolver == nil {
+		return nil, errors.New("ServiceManagerResolver not initialized")
 	}
-	return NewRemoteServiceManager(d.Location, d.IP)
+	return d.Resolver.Resolve(d.Location, d.IP)
 }

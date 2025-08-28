@@ -18,12 +18,25 @@ type Service struct {
 	RetryDelaySeconds int `json:"retry_delay_seconds,omitempty"`
 	MaxHealthQueries  int `json:"max_retries,omitempty"`
 
+	Resolver ServiceManagerResolver
+
 	lastUnhealthyAt time.Time `json:"-"`
 	retryCount      int       `json:"-"`
 }
 
+func NewService(name string, resolver ServiceManagerResolver, deps []Dependency) *Service {
+	for i := range deps {
+		deps[i].Resolver = resolver
+	}
+	return &Service{
+		Name:         name,
+		Resolver:     resolver,
+		Dependencies: deps,
+	}
+}
+
 func (s *Service) HealthCheck(maxDepConcurrency int, cache *healthCache) ([]healthStatus, error) {
-	manager, err := NewLocalServiceManager()
+	manager, err := s.Resolver.Resolve("localhost", "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to local SCM: %w", err)
 	}
@@ -74,7 +87,7 @@ func (s *Service) validate() error {
 		return errors.New("service name cannot be empty")
 	}
 
-	manager, err := NewLocalServiceManager()
+	manager, err := s.Resolver.Resolve("localhost", "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
@@ -89,7 +102,7 @@ func (s *Service) validate() error {
 
 func (s *Service) Recover(ctx RecoveryContext) error {
 	// Run Recovery Sequence
-	svcMgr, err := NewLocalServiceManager()
+	svcMgr, err := s.Resolver.Resolve("localhost", "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to service manager: %w", err)
 	}
@@ -154,7 +167,7 @@ func collectUniqueDependencies(services []Service) map[DependencyKey]Dependency 
 	unique := make(map[DependencyKey]Dependency)
 	for _, svc := range services {
 		for _, dep := range svc.Dependencies {
-			key := DependencyKey(dep) // ✅ idiomatic and quiets staticcheck
+			key := dep.Key() // ✅ idiomatic and quiets staticcheck
 			if _, exists := unique[key]; !exists {
 				unique[key] = dep
 			}

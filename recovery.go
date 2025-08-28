@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/smtp"
+	"os"
 	"os/exec"
 	"strconv"
 	"time"
@@ -85,6 +86,8 @@ func (r *RecoveryStep) getOnFailureAction() string {
 }
 
 func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
+	log.Printf("Executing recovery step: %s for services: %s", r.Type, ctx.ServiceName)
+
 	switch r.Type {
 	case RestartService:
 		return ctx.Services.Restart(ctx.ServiceName, r.RestartService.MaxAttempts, r.RestartService.DelayBetweenAttempts)
@@ -98,6 +101,10 @@ func (r *RecoveryStep) Execute(ctx RecoveryContext) error {
 }
 
 func (r *RunScriptAction) RunScript() error {
+	if _, err := os.Stat(r.ScriptPath); err != nil {
+		return fmt.Errorf("script path does not exist: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -140,7 +147,11 @@ func (s *SendEmailAction) SendEmail(cfg EmailConfig, svcName string) error {
 
 	body := s.Body
 	if body == "" {
-		body = fmt.Sprintf("Urgent: %q has failed to recover and is not running", svcName)
+		body = fmt.Sprintf(
+			"[Watchdog] Service %q failed recovery at %s",
+			svcName,
+			time.Now().Format(time.RFC1123),
+		)
 	}
 
 	msg := []byte(fmt.Sprintf(

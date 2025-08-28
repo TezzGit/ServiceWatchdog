@@ -143,3 +143,13 @@ func mustLocalServiceManager() ServiceManager {
 	}
 	return mgr
 }
+
+func (sw *serviceWatcher) InjectResolver(resolver ServiceManagerResolver) {
+	for i := range sw.Services {
+		sw.Services[i].Resolver = resolver
+
+		for j := range sw.Services[i].Dependencies {
+			sw.Services[i].Dependencies[j].Resolver = resolver
+		}
+	}
+}

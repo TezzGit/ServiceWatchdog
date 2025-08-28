@@ -19,7 +19,11 @@ func main() {
 
 	log.SetOutput(f)
 
-	watcher, err := loadConfig("config.json")
+	resolver := &DefaultServiceManagerResolver{
+		Connector: &DefaultSCMConnector{},
+	}
+
+	watcher, err := loadConfig("config.json", resolver)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
